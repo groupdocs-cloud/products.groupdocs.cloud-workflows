@@ -1,0 +1,69 @@
+name: Hugo
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Build environment'
+        type: environment
+        default: staging
+        required: true
+      branch:
+        description: 'Branch to checkout'
+        type: string
+        default: master
+        required: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    env:
+      NODE_ENV: ${{ github.event.inputs.environment }}
+      HUGO_ENVIRONMENT: ${{ github.event.inputs.environment }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          repository: groupdocs-cloud/products.groupdocs.cloud
+          ref: ${{ github.event.inputs.branch }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+
+      - name: Setup Hugo
+        uses: peaceiris/actions-hugo@v2
+        with:
+          extended: true
+
+      - name: Install Node.js Dependencies
+        run: npm install
+
+      - name: Process Markdown
+        run: npm run generate
+
+      - name: Build (${{ github.event.inputs.environment }})
+        if: ${{ github.event.inputs.environment != 'production' }}
+        run: hugo --config=config-stage.toml
+
+      - name: Build (production)
+        if: ${{ github.event.inputs.environment == 'production' }}
+        run: hugo --config=config-prod.toml
+
+      - name: Process sitemaps
+        run: |
+          npm run sitemaps
+          cp public/sitemaps/index.xml public/sitemaps.xml
+          cp public/sitemaps/index.xml public/sitemap.xml
+
+      - name: Deploy (${{ github.event.inputs.environment }})
+        if: ${{ github.event.inputs.environment != 'production' }}
+        run: hugo deploy --config=config-stage.toml --target=Home --maxDeletes=-1
+
+      - name: Deploy (production)
+        if: ${{ github.event.inputs.environment == 'production' }}
+        run: hugo deploy --config=config-prod.toml --target=Home --maxDeletes=-1
