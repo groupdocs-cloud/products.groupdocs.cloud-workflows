@@ -31,6 +31,7 @@ jobs:
         with:
           repository: groupdocs-cloud/products.groupdocs.cloud
           ref: ${{ github.event.inputs.branch }}
+          token: ${{ secrets.REPO_TOKEN }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v3
