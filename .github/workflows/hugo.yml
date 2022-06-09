@@ -47,21 +47,21 @@ jobs:
       - name: Process Markdown
         run: npm run generate
 
-      - name: Build (${{ github.event.inputs.environment }})
+      - name: Build (staging)
         if: ${{ github.event.inputs.environment != 'production' }}
-        run: hugo --config=config-stage.toml
+        run: hugo --config=config-stage.toml --minify
 
       - name: Build (production)
         if: ${{ github.event.inputs.environment == 'production' }}
-        run: hugo --config=config-prod.toml
+        run: hugo --config=config-prod.toml --minify
 
-      - name: Process sitemaps
+      - name: Process Sitemaps
         run: |
           npm run sitemaps
           cp public/sitemaps/index.xml public/sitemaps.xml
           cp public/sitemaps/index.xml public/sitemap.xml
 
-      - name: Deploy (${{ github.event.inputs.environment }})
+      - name: Deploy (staging)
         if: ${{ github.event.inputs.environment != 'production' }}
         run: hugo deploy --config=config-stage.toml --target=Home --maxDeletes=-1
 
