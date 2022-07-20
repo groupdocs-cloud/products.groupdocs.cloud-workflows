@@ -44,16 +44,21 @@ jobs:
       - name: Install Node.js Dependencies
         run: npm install
 
-      - name: Process Markdown
-        run: npm run generate
+      - name: Fetch external resources
+        run: npm run fetch
+
+      - name: Process pages
+        run: |
+          npm run pages:multilingual
+          npm run pages:GroupDocs.Conversion
 
       - name: Build (staging)
         if: ${{ github.event.inputs.environment != 'production' }}
-        run: hugo --config=config-stage.toml --minify
+        run: hugo --config=config-stage.toml,config.json
 
       - name: Build (production)
         if: ${{ github.event.inputs.environment == 'production' }}
-        run: hugo --config=config-prod.toml --minify
+        run: hugo --config=config-prod.toml,config.json
 
       - name: Process Sitemaps
         run: |
@@ -63,8 +68,8 @@ jobs:
 
       - name: Deploy (staging)
         if: ${{ github.event.inputs.environment != 'production' }}
-        run: hugo deploy --config=config-stage.toml --target=Home --maxDeletes=-1
+        run: hugo deploy --config=config-stage.toml,config.json --target=Home --maxDeletes=-1
 
       - name: Deploy (production)
         if: ${{ github.event.inputs.environment == 'production' }}
-        run: hugo deploy --config=config-prod.toml --target=Home --maxDeletes=-1
+        run: hugo deploy --config=config-prod.toml,config.json --target=Home --maxDeletes=-1
