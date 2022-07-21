@@ -13,6 +13,10 @@ on:
         type: string
         default: master
         required: true
+      configure_one_language:
+        type: string
+      configure_one_product:
+        type: string
 
 jobs:
   build:
@@ -21,6 +25,8 @@ jobs:
     env:
       NODE_ENV: ${{ github.event.inputs.environment }}
       HUGO_ENVIRONMENT: ${{ github.event.inputs.environment }}
+      CONFIGURE_ONE_LANGUAGE: ${{ github.event.inputs.configure_one_language }}
+      CONFIGURE_ONE_PRODUCT: ${{ github.event.inputs.configure_one_product }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
