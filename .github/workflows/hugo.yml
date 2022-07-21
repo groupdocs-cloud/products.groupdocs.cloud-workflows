@@ -25,7 +25,9 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
 
+    continue-on-error: true
     strategy:
+      fail-fast: false
       matrix:
         configure_one_language: [de, el, en, es, fr, ja, ru, zh]
         configure_one_product:
