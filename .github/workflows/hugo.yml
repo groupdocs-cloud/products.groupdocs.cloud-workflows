@@ -62,14 +62,14 @@ jobs:
         with:
           extended: true
 
+      - name: Install Node.js Dependencies
+        run: npm install
+
       - name: Configure build environment
         env:
           CONFIGURE_ONE_LANGUAGE: ${{ matrix.configure_one_language }}
           CONFIGURE_ONE_PRODUCT: ${{ matrix.configure_one_product }}
         run: npm run configure
-
-      - name: Install Node.js Dependencies
-        run: npm install
 
       - name: Fetch external resources
         run: npm run fetch
@@ -89,8 +89,8 @@ jobs:
 
       - name: Deploy (staging)
         if: ${{ github.event.inputs.environment != 'production' }}
-        run: hugo deploy --config=config-stage.toml,config.json --target=Home --maxDeletes=-1
+        run: hugo deploy --config=config-stage.toml,config.json --target=Home --maxDeletes=0
 
       - name: Deploy (production)
         if: ${{ github.event.inputs.environment == 'production' }}
-        run: hugo deploy --config=config-prod.toml,config.json --target=Home --maxDeletes=-1
+        run: hugo deploy --config=config-prod.toml,config.json --target=Home --maxDeletes=0
