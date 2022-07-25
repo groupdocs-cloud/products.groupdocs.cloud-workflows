@@ -89,6 +89,9 @@ jobs:
         if: ${{ github.event.inputs.environment == 'production' }}
         run: hugo --config=config-prod.toml,config.json
 
+      - name: Process Sitemaps
+        run: npm run sitemaps
+
       - name: Deploy (staging)
         if: ${{ github.event.inputs.environment != 'production' }}
         run: hugo deploy --config=config-stage.toml,config.json --target=Home --maxDeletes=0
