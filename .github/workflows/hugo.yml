@@ -81,21 +81,11 @@ jobs:
           npm run pages:multilingual
           npm run pages:GroupDocs.Conversion
 
-      - name: Build (staging)
-        if: ${{ github.event.inputs.environment != 'production' }}
-        run: hugo --config=config-stage.toml,config.json
-
-      - name: Build (production)
-        if: ${{ github.event.inputs.environment == 'production' }}
-        run: hugo --config=config-prod.toml,config.json
+      - name: Build
+        run: hugo
 
       - name: Process Sitemaps
         run: npm run sitemaps
 
-      - name: Deploy (staging)
-        if: ${{ github.event.inputs.environment != 'production' }}
-        run: hugo deploy --config=config-stage.toml,config.json --target=Home --maxDeletes=0
-
-      - name: Deploy (production)
-        if: ${{ github.event.inputs.environment == 'production' }}
-        run: hugo deploy --config=config-prod.toml,config.json --target=Home --maxDeletes=0
+      - name: Deploy
+        run: hugo deploy --maxDeletes=0
