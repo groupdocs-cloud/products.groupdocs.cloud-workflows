@@ -74,6 +74,8 @@ jobs:
         run: npm run configure
 
       - name: Process pages
+        env:
+          MAX_PROCESS_PARALLEL_PAGES: 1111
         run: |
           npm run pages:multilingual
           npm run pages:GroupDocs.Conversion
