@@ -79,6 +79,7 @@ jobs:
         run: |
           npm run pages:multilingual
           npm run pages:GroupDocs.Conversion
+          npm run pages:GroupDocs.Viewer
 
       - name: Build
         run: hugo
