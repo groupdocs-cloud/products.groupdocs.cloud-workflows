@@ -33,7 +33,6 @@ jobs:
         configure_one_product:
           - home
           - annotation
-          - assembly
           - classification
           - comparison
           - conversion
