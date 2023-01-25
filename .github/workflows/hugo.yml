@@ -29,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        configure_one_language: [de, el, en, es, fr, id, ja, ru, zh]
+        configure_one_language: [de, el, en, es, fr, id, ja, pt, ru, zh]
         configure_one_product:
           - home
           - annotation
