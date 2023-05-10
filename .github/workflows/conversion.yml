@@ -1,0 +1,88 @@
+name: Hugo (GroupDocs.Conversion)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Build environment'
+        type: environment
+        default: staging
+        required: true
+      branch:
+        description: 'Branch to checkout'
+        type: string
+        default: master
+        required: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    env:
+      NODE_ENV: ${{ github.event.inputs.environment }}
+      HUGO_ENVIRONMENT: ${{ github.event.inputs.environment }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        configure_one_language: [de, el, en, es, fr, id, it, ja, pt, ru, zh]
+        configure_one_product: [conversion]
+        configure_one_platform:
+          - index
+          - family
+          - android
+          - curl
+          - java
+          - net
+          - nodejs
+          - php
+          - python
+          - ruby
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          repository: groupdocs-cloud/products.groupdocs.cloud
+          ref: ${{ github.event.inputs.branch }}
+          token: ${{ secrets.REPO_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+
+      - name: Setup Hugo
+        uses: peaceiris/actions-hugo@v2
+        with:
+          extended: true
+
+      - name: Install Node.js Dependencies
+        run: npm install
+
+      - name: Configure build environment
+        env:
+          CONFIGURE_ONE_LANGUAGE: ${{ matrix.configure_one_language }}
+          CONFIGURE_ONE_PRODUCT: ${{ matrix.configure_one_product }}
+          CONFIGURE_ONE_PLATFORM: ${{ matrix.configure_one_platform }}
+        run: npm run configure
+
+      - name: Process pages
+        env:
+          MAX_PROCESS_PARALLEL_PAGES: 1111
+        run: |
+          npm run pages:multilingual
+          npm run pages:GroupDocs.Conversion
+
+      - name: Build
+        run: hugo
+
+      - name: Process Sitemaps
+        run: npm run sitemaps
+
+      - name: Deploy
+        run: hugo deploy --maxDeletes=0
