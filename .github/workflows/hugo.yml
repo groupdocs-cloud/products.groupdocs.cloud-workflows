@@ -61,10 +61,10 @@ jobs:
         with:
           node-version: 18
 
-      - name: Setup Hugo
-        uses: peaceiris/actions-hugo@v2
-        with:
-          extended: true
+      #- name: Setup Hugo
+      #  uses: peaceiris/actions-hugo@v2
+      #  with:
+      #    extended: true
 
       - name: Install Node.js Dependencies
         run: npm install
@@ -84,10 +84,10 @@ jobs:
           npm run pages:GroupDocs.Viewer
 
       - name: Build
-        run: hugo
+        run: ./node_modules/hugo-bin/vendor/hugo
 
       - name: Process Sitemaps
         run: npm run sitemaps
 
       - name: Deploy
-        run: hugo deploy --maxDeletes=0
+        run: ./node_modules/hugo-bin/vendor/hugo deploy --maxDeletes=0
