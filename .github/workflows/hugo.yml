@@ -16,7 +16,7 @@ on:
 
 jobs:
   build:
-    runs-on: macosx-latest
+    runs-on: macos-latest
     environment: ${{ github.event.inputs.environment }}
     env:
       NODE_ENV: ${{ github.event.inputs.environment }}
