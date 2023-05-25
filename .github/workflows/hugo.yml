@@ -29,13 +29,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        configure_one_language: [de, el, en, es, fr, id, it, ja, pt, ru, zh]
         configure_one_product:
           - home
+          - viewer
+          - conversion
           - annotation
           - classification
           - comparison
-          - conversion
           - editor
           - merger
           - metadata
@@ -44,8 +44,8 @@ jobs:
           - signature
           - total
           - translation
-          - viewer
           - watermark
+        configure_one_language: [en, de, el, es, fr, id, it, ja, pt, ru, zh]
 
     steps:
 
