@@ -84,10 +84,10 @@ jobs:
           npm run pages:GroupDocs.Viewer
 
       - name: Build
-        run: ./node_modules/hugo-bin/vendor/hugo
+        run: ./node_modules/hugo-bin/vendor/hugo --environment=${{ github.event.inputs.environment }}
 
       - name: Process Sitemaps
         run: npm run sitemaps
 
       - name: Deploy
-        run: ./node_modules/hugo-bin/vendor/hugo deploy --maxDeletes=0
+        run: ./node_modules/hugo-bin/vendor/hugo deploy --environment=${{ github.event.inputs.environment }} --maxDeletes=0
