@@ -82,6 +82,7 @@ jobs:
           npm run pages:multilingual
           npm run pages:GroupDocs.Conversion
           npm run pages:GroupDocs.Viewer
+          npm run pages:GroupDocs.Parser
 
       - name: Build
         run: ./node_modules/hugo-bin/vendor/hugo --environment=${{ github.event.inputs.environment }}
