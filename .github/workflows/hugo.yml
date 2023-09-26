@@ -84,8 +84,8 @@ jobs:
       - name: Build
         run: ./node_modules/hugo-bin/vendor/hugo --environment=${{ github.event.inputs.environment }}
 
-#      - name: Process Sitemaps
-#        run: npm run sitemaps
+      - name: Process Sitemaps
+        run: npm run sitemaps
 
       - name: Deploy to ${{ github.event.inputs.environment }}
         run: ./node_modules/hugo-bin/vendor/hugo deploy --environment=${{ github.event.inputs.environment }} --maxDeletes=0
