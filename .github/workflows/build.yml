@@ -28,6 +28,7 @@ jobs:
       GROUPDOCS_CLOUD_CLIENT_SECRET: ${{ secrets.GROUPDOCS_CLOUD_CLIENT_SECRET }}
       GPT_DATA_FETCH_BASEURL: ${{ secrets.GPT_DATA_FETCH_BASEURL }}
       NEXT_TELEMETRY_DISABLED: 1
+      NODE_OPTIONS: --max-old-space-size=10240
 
     steps:
       - uses: actions/checkout@v4
