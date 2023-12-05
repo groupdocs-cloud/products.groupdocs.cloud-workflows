@@ -44,14 +44,24 @@ jobs:
       - run: npm install
       - run: npm run build
 
-      - uses: jakejarvis/s3-sync-action@master
+      - name: Upload _next directory
+        uses: jakejarvis/s3-sync-action@master
+        with:
+          args: --delete
+        env:
+          SOURCE_DIR: out/_next
+          DEST_DIR: _next
+
+      - name: Upload English pages
+        uses: jakejarvis/s3-sync-action@master
         with:
           args: --dryrun
         env:
           SOURCE_DIR: out/en
 
-      - uses: jakejarvis/s3-sync-action@master
+      - name: Upload everything else
+        uses: jakejarvis/s3-sync-action@master
         with:
-          args: --exclude 'out/en' --exclude 'out/404*' --dryrun
+          args: --exclude 'en/*' --exclude '404/*' --exclude '404.*' --dryrun
         env:
           SOURCE_DIR: out
