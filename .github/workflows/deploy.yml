@@ -58,7 +58,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v3
       - run: |
-          tar xZf next.tar.xz
+          #tar xZf next.tar.xz
           find
 
   deploy-pages:
@@ -76,5 +76,5 @@ jobs:
     steps:
       - uses: actions/download-artifact@v3
       - run: |
-          tar xJf ${{ matrix.archive }}.tar.xz
+          #tar xJf ${{ matrix.archive }}.tar.xz
           find
