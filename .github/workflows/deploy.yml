@@ -21,6 +21,7 @@ jobs:
       GROUPDOCS_CLOUD_CLIENT_ID: ${{ secrets.GROUPDOCS_CLOUD_CLIENT_ID }}
       GROUPDOCS_CLOUD_CLIENT_SECRET: ${{ secrets.GROUPDOCS_CLOUD_CLIENT_SECRET }}
       GPT_DATA_FETCH_BASEURL: ${{ secrets.GPT_DATA_FETCH_BASEURL }}
+      GPT_DATA_NO_CHECK: 1
       NEXT_TELEMETRY_DISABLED: 1
       NODE_OPTIONS: --max-old-space-size=5555
 
@@ -58,7 +59,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v3
       - run: |
-          #tar xZf next.tar.xz
+          tar xJf artifact/next.tar.xz
           find
 
   deploy-pages:
@@ -76,5 +77,5 @@ jobs:
     steps:
       - uses: actions/download-artifact@v3
       - run: |
-          #tar xJf ${{ matrix.archive }}.tar.xz
+          tar xJf artifact/${{ matrix.archive }}.tar.xz
           find
