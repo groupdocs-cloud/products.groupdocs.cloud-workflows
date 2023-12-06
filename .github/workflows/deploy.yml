@@ -1,0 +1,78 @@
+name: Build and Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Build environment'
+        type: environment
+        default: staging
+        required: true
+      branch:
+        description: 'Branch to checkout'
+        type: string
+        default: main
+        required: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      GROUPDOCS_CLOUD_CLIENT_ID: ${{ secrets.GROUPDOCS_CLOUD_CLIENT_ID }}
+      GROUPDOCS_CLOUD_CLIENT_SECRET: ${{ secrets.GROUPDOCS_CLOUD_CLIENT_SECRET }}
+      GPT_DATA_FETCH_BASEURL: ${{ secrets.GPT_DATA_FETCH_BASEURL }}
+      NEXT_TELEMETRY_DISABLED: 1
+      NODE_OPTIONS: --max-old-space-size=5947
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: groupdocs-cloud/products2
+          ref: ${{ github.event.inputs.branch }}
+          token: ${{ secrets.REPO_TOKEN }}
+
+      - uses: actions/setup-node@v4
+      - run: npm install
+      - run: npm run build
+
+      - name: Archive _next directory
+        uses: RockLobster/archiving-upload-artifact@v0.2.1
+        with:
+          name: _next
+          directory: out/_next
+
+      - name: Archive English pages
+        uses: RockLobster/archiving-upload-artifact@v0.2.1
+        with:
+          name: en-pages
+          directory: out/en
+
+      - name: Archive German pages
+        uses: RockLobster/archiving-upload-artifact@v0.2.1
+        with:
+          name: de-pages
+          directory: out/de
+
+      - name: Archive Greek pages
+        uses: RockLobster/archiving-upload-artifact@v0.2.1
+        with:
+          name: el-pages
+          directory: out/el
+
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+      AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+    strategy:
+      matrix:
+        artifact: [_next, en-pages, de-pages, el-pages]
+    steps:
+      - name: Download ${{ matrix.artifact }}
+        uses: RockLobster/unarchiving-download-artifact@v0.2.4
+        with:
+          name: ${{ matrix.artifact }}
+      - run: ls -Ral
