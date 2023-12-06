@@ -38,10 +38,10 @@ jobs:
 
       - name: Prepare artifacts
         run: |
-          tar -cJf next.tar.xz -C ${{ github.workspace }}/out ./_next
-          tar -cJf en-pages.tar.xz -C ${{ github.workspace }}/out/en .
-          tar -cJf de-pages.tar.xz -C ${{ github.workspace }}/out ./de
-          tar -cJf el-pages.tar.xz -C ${{ github.workspace }}/out ./el
+          tar -cJf _next.tar.xz -C ${{ github.workspace }}/out ./_next
+          tar -cJf en.tar.xz -C ${{ github.workspace }}/out/en .
+          tar -cJf de.tar.xz -C ${{ github.workspace }}/out ./de
+          tar -cJf el.tar.xz -C ${{ github.workspace }}/out ./el
 
       - uses: actions/upload-artifact@v3
         with:
@@ -58,9 +58,13 @@ jobs:
       AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
     strategy:
       matrix:
-        archive: [next, en-pages, de-pages, el-pages]
+        archive: [_next, en, de, el]
     steps:
-      - uses: actions/download-artifact@v3
-      - run: tar xJf artifact/${{ matrix.archive }}.tar.xz
-      - run: rm -rf artifact
-      - run: aws s3 sync . s3://${{ secrets.AWS_S3_BUCKET }} --cache-control public,max-age=97969,must-revalidate
+      - name: Download artifacts
+        uses: actions/download-artifact@v3
+      - name: Extract artifacts
+        run: |
+          tar xJf artifact/${{ matrix.archive }}.tar.xz
+          rm -rf artifact
+      - name: Upload to S3
+        run: aws s3 sync . s3://${{ secrets.AWS_S3_BUCKET }} --cache-control public,max-age=97969,must-revalidate
