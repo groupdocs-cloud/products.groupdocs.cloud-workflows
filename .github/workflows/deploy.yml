@@ -35,31 +35,31 @@ jobs:
       - run: npm install
       - run: npm run build
 
-      - name: Archive _next directory
-        uses: RockLobster/archiving-upload-artifact@v0.2.1
-        with:
-          name: _next
-          directory: out/_next
+      - name: Prepare artifacts
+        run: |
+          tar -cZf next.tar.xz -C ${{ github.workspace }}/out ./_next
+          tar -cZf en-pages.tar.xz -C ${{ github.workspace }}/out/en .
+          tar -cZf de-pages.tar.xz -C ${{ github.workspace }}/out ./de
+          tar -cZf el-pages.tar.xz -C ${{ github.workspace }}/out ./el
 
-      - name: Archive English pages
-        uses: RockLobster/archiving-upload-artifact@v0.2.1
+      - uses: actions/upload-artifact@v3
         with:
-          name: en-pages
-          directory: out/en
+          path: '*.tar.xz'
 
-      - name: Archive German pages
-        uses: RockLobster/archiving-upload-artifact@v0.2.1
-        with:
-          name: de-pages
-          directory: out/de
+  deploy-shared:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+      AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+    steps:
+      - uses: actions/download-artifact@v3
+      - run: ls -Ral
 
-      - name: Archive Greek pages
-        uses: RockLobster/archiving-upload-artifact@v0.2.1
-        with:
-          name: el-pages
-          directory: out/el
-
-  deploy:
+  deploy-pages:
     needs: build
     runs-on: ubuntu-latest
     environment: ${{ github.event.inputs.environment }}
@@ -70,10 +70,9 @@ jobs:
       AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
     strategy:
       matrix:
-        artifact: [_next, en-pages, de-pages, el-pages]
+        archive: [next, en-pages, de-pages, el-pages]
     steps:
-      - name: Download ${{ matrix.artifact }}
-        uses: RockLobster/unarchiving-download-artifact@v0.2.4
-        with:
-          name: ${{ matrix.artifact }}
-      - run: ls -Ral
+      - uses: actions/download-artifact@v3
+      - run: |
+          tar xZf ${{ matrix.archive }}.tar.xz
+          find
