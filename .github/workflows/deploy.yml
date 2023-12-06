@@ -37,10 +37,10 @@ jobs:
 
       - name: Prepare artifacts
         run: |
-          tar -cZf next.tar.xz -C ${{ github.workspace }}/out ./_next
-          tar -cZf en-pages.tar.xz -C ${{ github.workspace }}/out/en .
-          tar -cZf de-pages.tar.xz -C ${{ github.workspace }}/out ./de
-          tar -cZf el-pages.tar.xz -C ${{ github.workspace }}/out ./el
+          tar -cJf next.tar.xz -C ${{ github.workspace }}/out ./_next
+          tar -cJf en-pages.tar.xz -C ${{ github.workspace }}/out/en .
+          tar -cJf de-pages.tar.xz -C ${{ github.workspace }}/out ./de
+          tar -cJf el-pages.tar.xz -C ${{ github.workspace }}/out ./el
 
       - uses: actions/upload-artifact@v3
         with:
@@ -76,5 +76,5 @@ jobs:
     steps:
       - uses: actions/download-artifact@v3
       - run: |
-          tar xZf ${{ matrix.archive }}.tar.xz
+          tar xJf ${{ matrix.archive }}.tar.xz
           find
