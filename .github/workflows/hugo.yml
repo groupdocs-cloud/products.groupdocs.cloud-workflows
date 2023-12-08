@@ -16,11 +16,11 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     environment: ${{ github.event.inputs.environment }}
     env:
       NODE_ENV: ${{ github.event.inputs.environment }}
-      NODE_OPTIONS: --max-old-space-size=11111
+      NODE_OPTIONS: --max-old-space-size=5555
       HUGO_ENVIRONMENT: ${{ github.event.inputs.environment }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
