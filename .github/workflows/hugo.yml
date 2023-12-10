@@ -25,6 +25,8 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+      CONFIGURE_ONE_LANGUAGE: ${{ matrix.configure_one_language }}
+      CONFIGURE_ONE_PRODUCT: ${{ matrix.configure_one_product }}
 
     continue-on-error: true
     strategy:
@@ -71,16 +73,12 @@ jobs:
         run: npm install
 
       - name: Configure build environment
-        env:
-          CONFIGURE_ONE_LANGUAGE: ${{ matrix.configure_one_language }}
-          CONFIGURE_ONE_PRODUCT: ${{ matrix.configure_one_product }}
         run: npm run configure
 
       - name: Process pages
         env:
-          MAX_PROCESS_PARALLEL_PAGES: 1111
-        run: |
-          npm run pages
+          MAX_PROCESS_PARALLEL_PAGES: 11111
+        run: npm run pages
 
       - name: Build
         run: ./node_modules/hugo-bin/vendor/hugo --environment=${{ github.event.inputs.environment }}
