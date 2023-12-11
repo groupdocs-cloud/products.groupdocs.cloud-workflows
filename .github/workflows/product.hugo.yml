@@ -15,10 +15,23 @@ on:
         required: true
       product:
         description: 'Product'
-        type: string
-        default: home
-        required: true
-
+        type: choice
+        options:
+          - home
+          - viewer
+          - conversion
+          - annotation
+          - classification
+          - comparison
+          - editor
+          - merger
+          - metadata
+          - parser
+          - rewriter
+          - signature
+          - total
+          - translation
+          - watermark
 jobs:
   build:
     runs-on: macos-latest
