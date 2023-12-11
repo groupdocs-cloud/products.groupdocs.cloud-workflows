@@ -1,5 +1,5 @@
 name: Hugo (One Product)
-run-name: Hugo (${{ github.event.inputs.product }})
+run-name: Hugo ${{ github.event.inputs.product }} - ${{ github.event.inputs.environment }}
 
 on:
   workflow_dispatch:
