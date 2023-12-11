@@ -1,4 +1,5 @@
 name: Hugo (One Product)
+run-name: Hugo (${{ github.event.inputs.product }})
 
 on:
   workflow_dispatch:
