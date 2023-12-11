@@ -64,5 +64,5 @@ jobs:
       - run: npm run configure
       - run: npm run pages
       - run: ./node_modules/hugo-bin/vendor/hugo --environment=${{ github.event.inputs.environment }}
-      #- run: npm run sitemaps
+      - run: npm run sitemaps
       - run: ./node_modules/hugo-bin/vendor/hugo deploy --environment=${{ github.event.inputs.environment }} --maxDeletes=0
