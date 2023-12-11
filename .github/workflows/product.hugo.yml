@@ -1,4 +1,4 @@
-name: Hugo (One Product)
+name: Hugo (${{ github.event.inputs.product }})
 
 on:
   workflow_dispatch:
@@ -44,7 +44,7 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
       CONFIGURE_ONE_LANGUAGE: ${{ matrix.configure_one_language }}
-      CONFIGURE_ONE_PRODUCT: metadata
+      CONFIGURE_ONE_PRODUCT: ${{ github.event.inputs.product }}
 
     continue-on-error: true
     strategy:
