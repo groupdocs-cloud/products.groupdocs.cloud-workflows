@@ -1,20 +1,20 @@
-name: Hugo (${{ github.event.inputs.product }})
+name: Hugo (One Product)
 
 on:
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Build environment'
+        description: Build environment
         type: environment
         default: staging
         required: true
       branch:
-        description: 'Branch to checkout'
+        description: Branch to checkout
         type: string
         default: master
         required: true
       product:
-        description: 'Product'
+        description: Product
         type: choice
         options:
           - home
