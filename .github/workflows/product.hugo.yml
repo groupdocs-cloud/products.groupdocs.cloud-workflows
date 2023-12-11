@@ -1,4 +1,4 @@
-name: Hugo (Metadata)
+name: Hugo (One Product)
 
 on:
   workflow_dispatch:
@@ -12,6 +12,11 @@ on:
         description: 'Branch to checkout'
         type: string
         default: master
+        required: true
+      product:
+        description: 'Product'
+        type: string
+        default: home
         required: true
 
 jobs:
@@ -35,38 +40,18 @@ jobs:
         configure_one_language: [en, de, el, es, fr, id, it, ja, pt, ru, zh]
 
     steps:
-
-      - name: Checkout
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           repository: groupdocs-cloud/products.groupdocs.cloud
           ref: ${{ github.event.inputs.branch }}
           token: ${{ secrets.REPO_TOKEN }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
+      - uses: actions/setup-node@v4
+      - uses: peaceiris/actions-hugo@v2
         with:
-          node-version: 18
-
-      #- name: Setup Hugo
-      #  uses: peaceiris/actions-hugo@v2
-      #  with:
-      #    extended: true
-
-      - name: Install Node.js Dependencies
-        run: npm install
-
-      - name: Configure build environment
-        run: npm run configure
-
-      - name: Process pages
-        run: npm run pages
-
-      - name: Build
-        run: ./node_modules/hugo-bin/vendor/hugo --environment=${{ github.event.inputs.environment }}
-
-      - name: Process Sitemaps
-        run: npm run sitemaps
-
-      - name: Deploy to ${{ github.event.inputs.environment }}
-        run: ./node_modules/hugo-bin/vendor/hugo deploy --environment=${{ github.event.inputs.environment }} --maxDeletes=0
+          extended: true
+      - run: npm install
+      - run: npm run configure
+      - run: npm run pages
+      - run: hugo --environment=${{ github.event.inputs.environment }}
+      #- run: npm run sitemaps
+      - run: hugo deploy --environment=${{ github.event.inputs.environment }} --maxDeletes=0
