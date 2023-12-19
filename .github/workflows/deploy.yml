@@ -39,12 +39,13 @@ jobs:
 
       - name: Prepare artifacts
         run: |
-          tar -cJf _next.tar.xz -C ${{ github.workspace }}/out ./_next
-          tar -cJf en.tar.xz -C ${{ github.workspace }}/out/en .
+          tar -cJf _next.tar.xz -C ${{ github.workspace }}/out ./_next          
           tar -cJf de.tar.xz -C ${{ github.workspace }}/out ./de
           tar -cJf el.tar.xz -C ${{ github.workspace }}/out ./el
+          rm -rf ${{ github.workspace }}/out/{_next,de,el}
           mv ${{ github.workspace }}/out/sitemap-*.xml .
           tar -cJf sitemaps.tar.xz ./sitemap-*.xml
+          tar -cJf en.tar.xz -C ${{ github.workspace }}/out .
 
       - uses: actions/upload-artifact@v3
         with:
