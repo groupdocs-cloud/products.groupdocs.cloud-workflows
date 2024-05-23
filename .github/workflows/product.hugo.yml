@@ -51,7 +51,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        configure_one_language: [en, de, el, es, fr, id, it, ja, pt, ru, zh]
+        configure_one_language: [en, de, el, es, fr, id, it, ja, pt, ru, zh, ko]
 
     steps:
       - uses: actions/checkout@v4
