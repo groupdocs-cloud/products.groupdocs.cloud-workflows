@@ -18,14 +18,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      GROUPDOCS_CLOUD_CLIENT_ID: ${{ secrets.GROUPDOCS_CLOUD_CLIENT_ID }}
-      GROUPDOCS_CLOUD_CLIENT_SECRET: ${{ secrets.GROUPDOCS_CLOUD_CLIENT_SECRET }}
-      GTM_ID: ${{ secrets.GTM_ID }}
-      GPT_DATA_FETCH_BASEURL: ${{ secrets.GPT_DATA_FETCH_BASEURL }}
-      GPT_DATA_NO_CHECK: 1
-      NEXT_TELEMETRY_DISABLED: 1
-      NODE_OPTIONS: --max-old-space-size=5555
 
     steps:
       - uses: actions/checkout@v4
@@ -37,6 +29,14 @@ jobs:
       - uses: actions/setup-node@v4
       - run: npm install
       - run: npm run build
+        env:
+          GROUPDOCS_CLOUD_CLIENT_ID: ${{ secrets.GROUPDOCS_CLOUD_CLIENT_ID }}
+          GROUPDOCS_CLOUD_CLIENT_SECRET: ${{ secrets.GROUPDOCS_CLOUD_CLIENT_SECRET }}
+          GTM_ID: ${{ secrets.GTM_ID }}
+          GPT_DATA_FETCH_BASEURL: ${{ secrets.GPT_DATA_FETCH_BASEURL }}
+          GPT_DATA_NO_CHECK: 1
+          NEXT_TELEMETRY_DISABLED: 1
+          NODE_OPTIONS: --max-old-space-size=5555
 
       - name: Prepare artifacts
         run: |
