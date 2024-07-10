@@ -1,4 +1,4 @@
-name: All Products
+name: All Products to Production
 
 on:
   workflow_dispatch:
