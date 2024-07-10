@@ -9,10 +9,22 @@ jobs:
         product:
           - home
           - viewer
+          - conversion
+          - annotation
+          - classification
+          - comparison
+          - editor
+          - merger
+          - metadata
+          - parser
+          - rewriter
+          - signature
           - total
+          - translation
+          - watermark
     runs-on: ubuntu-latest
     steps:
       - uses: benc-uk/workflow-dispatch@v1
         with:
           workflow: product.hugo.yml
-          inputs: '{ "environment": "staging", "product": "${{ matrix.product }}" }'
+          inputs: '{ "environment": "production", "product": "${{ matrix.product }}" }'
