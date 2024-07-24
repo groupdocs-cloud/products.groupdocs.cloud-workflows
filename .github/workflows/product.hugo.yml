@@ -35,7 +35,7 @@ on:
           - watermark
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     environment: ${{ github.event.inputs.environment }}
     env:
       NODE_ENV: ${{ github.event.inputs.environment }}
@@ -59,9 +59,7 @@ jobs:
           repository: groupdocs-cloud/products.groupdocs.cloud
           ref: ${{ github.event.inputs.branch }}
           token: ${{ secrets.REPO_TOKEN }}
-      - uses: peaceiris/actions-hugo@v3
-        with:
-          extended: true
+      - run: brew install hugo
       - uses: actions/setup-node@v4
       - run: npm install
       - run: npm run configure
