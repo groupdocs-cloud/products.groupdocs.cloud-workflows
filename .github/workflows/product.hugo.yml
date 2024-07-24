@@ -59,12 +59,15 @@ jobs:
           repository: groupdocs-cloud/products.groupdocs.cloud
           ref: ${{ github.event.inputs.branch }}
           token: ${{ secrets.REPO_TOKEN }}
+      - uses: peaceiris/actions-hugo@v3
+        with:
+          extended: true
       - uses: actions/setup-node@v4
       - run: npm install
       - run: npm run configure
       - run: npm run pages
       - name: Download content
         run: wget -O- http://products.groupdocs.cloud.s3-website.us-west-2.amazonaws.com/generated.tar.xz | tar xJ
-      - run: ./node_modules/hugo-bin/vendor/hugo --environment=${{ github.event.inputs.environment }}
+      - run: hugo --environment=${{ github.event.inputs.environment }}
       - run: npm run sitemaps
-      - run: ./node_modules/hugo-bin/vendor/hugo deploy --environment=${{ github.event.inputs.environment }} --maxDeletes=0
+      - run: hugo deploy --environment=${{ github.event.inputs.environment }} --maxDeletes=0
