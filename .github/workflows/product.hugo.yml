@@ -67,5 +67,4 @@ jobs:
       - name: Download content
         run: wget -O- http://products.groupdocs.cloud.s3-website.us-west-2.amazonaws.com/generated.tar.xz | tar xJ
       - run: hugo --environment=${{ github.event.inputs.environment }}
-      - run: npm run sitemaps
       - run: hugo deploy --environment=${{ github.event.inputs.environment }} --maxDeletes=0
