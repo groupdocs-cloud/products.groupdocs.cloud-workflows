@@ -65,6 +65,8 @@ jobs:
       - run: npm run configure
       - run: npm run pages
       - name: Download content
-        run: wget -O- http://products.groupdocs.cloud.s3-website.us-west-2.amazonaws.com/generated.tar.xz | tar xJ
+        run: wget -O- http://products.groupdocs.cloud.s3-website.us-west-2.amazonaws.com/generated.zip
+      - name: Extract content
+        run: unzip generated.zip
       - run: hugo --environment=${{ github.event.inputs.environment }}
       - run: hugo deploy --environment=${{ github.event.inputs.environment }} --maxDeletes=0
