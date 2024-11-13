@@ -1,4 +1,4 @@
-name: Hugo (One Product)
+name: Hugo Static Pages (One Product)
 run-name: Hugo (${{ github.event.inputs.product }} - ${{ github.event.inputs.environment }})
 
 on:
