@@ -99,4 +99,11 @@ jobs:
             BASE_URL="https://products.groupdocs.cloud"
           fi
 
-          curl --write-out '%{http_code}' --silent --output /dev/null -d '{"website":"$BASE_URL/*"}' -H "Content-Type: application/json" -X POST "$API_ENDPOINT"
+          URL="$BASE_URL/*"
+      
+          curl --write-out "HTTP Status: %{http_code}\n" \
+               --silent \
+               --output /dev/null \
+               -d "{\"website\":\"$URL\"}" \
+               -H "Content-Type: application/json" \
+               -X POST "$API_ENDPOINT 

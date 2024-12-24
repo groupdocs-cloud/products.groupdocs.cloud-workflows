@@ -74,6 +74,7 @@ jobs:
       
           curl --write-out "HTTP Status: %{http_code}\n" \
                --silent \
+               --output /dev/null \
                -d "{\"website\":\"$URL\"}" \
                -H "Content-Type: application/json" \
                -X POST "$API_ENDPOINT"

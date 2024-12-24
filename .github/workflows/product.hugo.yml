@@ -80,6 +80,20 @@ jobs:
           if [ "$ENVIRONMENT" = "production" ]; then
             BASE_URL="https://products.groupdocs.cloud"
           fi
+      
+          URL_EN="$BASE_URL/$PRODUCT/*"
+          URL_LANG="$BASE_URL/*/$PRODUCT/*"
+      
+          curl --write-out "HTTP Status: %{http_code}\n" \
+               --silent \
+               --output /dev/null \
+               -d "{\"website\":\"$URL_EN\"}" \
+               -H "Content-Type: application/json" \
+               -X POST "$API_ENDPOINT   
 
-          curl --write-out '%{http_code}' --silent --output /dev/null -d '{"website":"$BASE_URL/$PRODUCT/*"}' -H "Content-Type: application/json" -X POST "$API_ENDPOINT"
-          curl --write-out '%{http_code}' --silent --output /dev/null -d '{"website":"$BASE_URL/*/$PRODUCT/*"}' -H "Content-Type: application/json" -X POST "$API_ENDPOINT"
+          curl --write-out "HTTP Status: %{http_code}\n" \
+               --silent \
+               --output /dev/null \
+               -d "{\"website\":\"$URL_LANG"}" \
+               -H "Content-Type: application/json" \
+               -X POST "$API_ENDPOINT"
