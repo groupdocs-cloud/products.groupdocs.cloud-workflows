@@ -54,3 +54,18 @@ jobs:
       - run: npm run pages
       - run: hugo --environment=${{ github.event.inputs.environment }}
       - run: hugo deploy --environment=${{ github.event.inputs.environment }} --maxDeletes=0
+      - name: Invalidate cache
+        env:
+          PRODUCT: ${{ github.event.inputs.product }}
+          LANGUAGE: ${{ matrix.configure_one_language }}
+          API_ENDPOINT: ${{ secrets.CACHE_INVALIDATION_API_ENDPOINT }}
+        run: |
+          if [ "$LANGUAGE" = "en" ]; then
+            curl --write-out '%{http_code}' --silent --output /dev/null \
+              -d '{"website":"https://products-qa.groupdocs.cloud/$PRODUCT/*"}' \
+              -H "Content-Type: application/json" -X POST "$API_ENDPOINT"
+          else
+            curl --write-out '%{http_code}' --silent --output /dev/null \
+              -d '{"website":"https://products-qa.groupdocs.cloud/$LANGUAGE/$PRODUCT/*"}' \
+              -H "Content-Type: application/json" -X POST "$API_ENDPOINT"
+          fi
