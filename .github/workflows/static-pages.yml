@@ -65,15 +65,23 @@ jobs:
           if [ "$ENVIRONMENT" = "production" ]; then
             BASE_URL="https://products.groupdocs.cloud"
           fi
-
+      
           if [ "$LANGUAGE" = "en" ]; then
-            echo "URL: $BASE_URL/$PRODUCT/*"
-            curl \
-              -d '{"website":"$BASE_URL/$PRODUCT/*"}' \
-              -H "Content-Type: application/json" -X POST "$API_ENDPOINT"
+            URL="$BASE_URL/$PRODUCT/*"
           else
-            echo "$BASE_URL/$LANGUAGE/$PRODUCT/*"
-            curl \
-              -d '{"website":"$BASE_URL/$LANGUAGE/$PRODUCT/*"}' \
-              -H "Content-Type: application/json" -X POST "$API_ENDPOINT"
+            URL="$BASE_URL/$LANGUAGE/$PRODUCT/*"
           fi
+      
+          echo "Constructed URL: $URL"
+      
+          # Send the request and capture response
+          curl --write-out "HTTP Status: %{http_code}\n" \
+               --silent \
+               --output response.log \
+               -d "{\"website\":\"$URL\"}" \
+               -H "Content-Type: application/json" \
+               -X POST "$API_ENDPOINT"
+      
+          # Print the response for debugging
+          echo "Response body:"
+          cat response.log
