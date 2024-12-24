@@ -91,6 +91,12 @@ jobs:
 
       - name: Invalidate cache
         env:
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
           API_ENDPOINT: ${{ secrets.CACHE_INVALIDATION_API_ENDPOINT }}
         run: |
-          curl --write-out '%{http_code}' --silent --output /dev/null -d '{"website":"https://products-qa.groupdocs.cloud/*"}' -H "Content-Type: application/json" -X POST "$API_ENDPOINT"
+          BASE_URL="https://products-qa.groupdocs.cloud"
+          if [ "$ENVIRONMENT" = "production" ]; then
+            BASE_URL="https://products.groupdocs.cloud"
+          fi
+
+          curl --write-out '%{http_code}' --silent --output /dev/null -d '{"website":"$BASE_URL/*"}' -H "Content-Type: application/json" -X POST "$API_ENDPOINT"
