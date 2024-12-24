@@ -42,6 +42,7 @@ jobs:
           - php
           - python
           - ruby
+          - go
     steps:
 
       - name: Checkout
