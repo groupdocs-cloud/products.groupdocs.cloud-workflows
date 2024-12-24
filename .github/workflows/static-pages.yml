@@ -67,10 +67,12 @@ jobs:
           fi
 
           if [ "$LANGUAGE" = "en" ]; then
+            echo "URL: $BASE_URL/$PRODUCT/*"
             curl --write-out '%{http_code}' --silent --output /dev/null \
               -d '{"website":"$BASE_URL/$PRODUCT/*"}' \
               -H "Content-Type: application/json" -X POST "$API_ENDPOINT"
           else
+            echo "$BASE_URL/$LANGUAGE/$PRODUCT/*"
             curl --write-out '%{http_code}' --silent --output /dev/null \
               -d '{"website":"$BASE_URL/$LANGUAGE/$PRODUCT/*"}' \
               -H "Content-Type: application/json" -X POST "$API_ENDPOINT"
