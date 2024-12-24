@@ -47,7 +47,7 @@ jobs:
           repository: groupdocs-cloud/products.groupdocs.cloud
           ref: ${{ github.event.inputs.branch }}
           token: ${{ secrets.REPO_TOKEN }}
-      - run: brew install hugo@0.139.5
+      - run: brew install hugo
       - uses: actions/setup-node@v4
       - run: npm install
       - run: npm run configure
