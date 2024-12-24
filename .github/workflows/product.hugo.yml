@@ -70,3 +70,10 @@ jobs:
         run: unzip generated.zip
       - run: hugo --environment=${{ github.event.inputs.environment }}
       - run: hugo deploy --environment=${{ github.event.inputs.environment }} --maxDeletes=0
+      - name: Invalidate cache
+        env:
+          PRODUCT: ${{ github.event.inputs.product }}
+          API_ENDPOINT: ${{ secrets.CACHE_INVALIDATION_API_ENDPOINT }}
+        run: |
+          curl --write-out '%{http_code}' --silent --output /dev/null -d '{"website":"https://products-qa.groupdocs.cloud/$PRODUCT/*"}' -H "Content-Type: application/json" -X POST "$API_ENDPOINT"
+          curl --write-out '%{http_code}' --silent --output /dev/null -d '{"website":"https://products-qa.groupdocs.cloud/*/$PRODUCT/*"}' -H "Content-Type: application/json" -X POST "$API_ENDPOINT"

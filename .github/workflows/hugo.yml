@@ -88,3 +88,9 @@ jobs:
 
       - name: Deploy to ${{ github.event.inputs.environment }}
         run: ./node_modules/hugo-bin/vendor/hugo deploy --environment=${{ github.event.inputs.environment }} --maxDeletes=0
+
+      - name: Invalidate cache
+        env:
+          API_ENDPOINT: ${{ secrets.CACHE_INVALIDATION_API_ENDPOINT }}
+        run: |
+          curl --write-out '%{http_code}' --silent --output /dev/null -d '{"website":"https://products-qa.groupdocs.cloud/*"}' -H "Content-Type: application/json" -X POST "$API_ENDPOINT"
