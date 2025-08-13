@@ -21,6 +21,7 @@ on:
           - viewer
           - conversion
           - metadata
+          - assembly
 jobs:
   build:
     runs-on: macos-latest

@@ -48,6 +48,7 @@ jobs:
           - total
           - translation
           - watermark
+          - assembly
         configure_one_language: [en, de, el, es, fr, id, it, ja, pt, ru, zh]
 
     steps:

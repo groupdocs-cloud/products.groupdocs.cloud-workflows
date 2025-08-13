@@ -33,6 +33,7 @@ on:
           - total
           - translation
           - watermark
+          - assembly
 jobs:
   build:
     runs-on: macos-latest
