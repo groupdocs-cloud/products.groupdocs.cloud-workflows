@@ -1,62 +1,79 @@
-name: i18n-pipeline
+name: i18n-pipeline (Products)
 
 on:
-  # Run it automatically when content/config/scripts change
-  push:
-    paths:
-      - 'content/**'
-      - 'config/**'
-      - 'data/**'
-      - 'scripts/**'
-  # And allow manual runs for "translate now" button
   workflow_dispatch:
+    inputs:
+      branch:
+        description: Branch to checkout from products.groupdocs.cloud
+        type: string
+        default: master
+        required: true
 
 jobs:
   i18n:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # If your repo is private and you need a token to fetch submodules,
-          # set token: ${{ secrets.REPO_TOKEN }}
-          fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+    steps:
+      # 1) (Optional) checkout this workflows repo (kept for provenance)
+      - name: Checkout orchestrator repo
+        uses: actions/checkout@v4
+
+      # 2) Checkout the PRIVATE repo we actually want to run in
+      - name: Checkout products.groupdocs.cloud (private)
+        uses: actions/checkout@v4
+        with:
+          repository: groupdocs-cloud/products.groupdocs.cloud
+          ref: ${{ github.event.inputs.branch }}
+          token: ${{ secrets.REPO_TOKEN }}     # PAT with repo read (and write if ever needed)
+          path: src
+
+      # 3) Node runtime
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Install deps
-        run: npm ci
-
-      # If your local `npm run i18n` ALREADY runs pages first, you can skip this step.
-      # If not sure, keep Pass 1 to ensure missing.json is populated in CI.
-      #- name: Generate pages (Pass 1 - populate missing keys)
-      #  run: npm run pages
-
-      - name: Run i18n (auto → merge → fallback → publish)
-        env:
-          # This GIST_TOKEN is your PAT (gist:write) stored as a secret
-          GITHUB_TOKEN: ${{ secrets.GIST_TOKEN }}
-          GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
-          MAX_PROCESS_PARALLEL_PAGES: ${{ secrets.MAX_PROCESS_PARALLEL_PAGES }}
-        # If your package.json has an "i18n" meta-script that already chains these, use `npm run i18n`.
-        # Otherwise run the individual steps:
+      # 4) Install deps (ci if lockfile exists; else install)
+      - name: Install dependencies
+        working-directory: src
         run: |
-          if npm run | grep -q "^  i18n$"; then
-            npm run i18n
+          if [ -f package-lock.json ]; then
+            npm ci
           else
-            npm run i18n:auto
-            npm run i18n:merge
-            npm run i18n:fallback
-            npm run i18n:publish
+            npm install
           fi
 
-      # Optional: regenerate pages with fresh translations so artifacts can be uploaded if you want
-      - name: Generate pages (Pass 2 - consume translations)
-        run: npm run pages
+      # 5) Materialize Google creds file from secret (no file committed)
+      - name: Write Google credentials file
+        run: echo "${{ secrets.GOOGLE_CREDENTIALS_JSON }}" > $HOME/gcloud.json
 
-      # Optional: upload generated artifacts (helpful for debugging/preview)
-      - uses: actions/upload-artifact@v4
+      # 6) Run your full local chain (configure → pages → i18n:auto → merge → fallback → publish)
+      - name: Run i18n (full chain)
+        working-directory: src
+        env:
+          # Gist PAT (gist:write). Mapped to the env var your script expects.
+          GITHUB_TOKEN: ${{ secrets.GIST_TOKEN }}
+
+          # Google SA JSON path for Translate client
+          GOOGLE_APPLICATION_CREDENTIALS: $HOME/gcloud.json
+
+          # Optional knobs consumed by your scripts
+          MAX_PROCESS_PARALLEL_PAGES: ${{ secrets.MAX_PROCESS_PARALLEL_PAGES }}
+
+          # Optional if you made Gist ID configurable in i18n-publish.cjs
+          # GIST_ID: ${{ secrets.GIST_ID }}
+        run: npm run i18n
+
+      # 7) (Optional) Re-run pages to materialize with freshest strings (harmless if npm run i18n already did it)
+      # - name: Generate pages (optional)
+      #   working-directory: src
+      #   run: npm run pages
+
+      # 8) (Optional) Upload generated content for inspection/debug
+      - name: Upload generated content (optional)
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: generated-pages
-          path: generated-content/
+          name: generated-content
+          path: src/generated-content/
+          if-no-files-found: ignore
