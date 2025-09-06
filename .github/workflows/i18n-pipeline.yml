@@ -1,0 +1,62 @@
+name: i18n-pipeline
+
+on:
+  # Run it automatically when content/config/scripts change
+  push:
+    paths:
+      - 'content/**'
+      - 'config/**'
+      - 'data/**'
+      - 'scripts/**'
+  # And allow manual runs for "translate now" button
+  workflow_dispatch:
+
+jobs:
+  i18n:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # If your repo is private and you need a token to fetch submodules,
+          # set token: ${{ secrets.REPO_TOKEN }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install deps
+        run: npm ci
+
+      # If your local `npm run i18n` ALREADY runs pages first, you can skip this step.
+      # If not sure, keep Pass 1 to ensure missing.json is populated in CI.
+      - name: Generate pages (Pass 1 - populate missing keys)
+        run: npm run pages
+
+      - name: Run i18n (auto → merge → fallback → publish)
+        env:
+          # This GIST_TOKEN is your PAT (gist:write) stored as a secret
+          GITHUB_TOKEN: ${{ secrets.GIST_TOKEN }}
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+          MAX_PROCESS_PARALLEL_PAGES: ${{ secrets.MAX_PROCESS_PARALLEL_PAGES }}
+        # If your package.json has an "i18n" meta-script that already chains these, use `npm run i18n`.
+        # Otherwise run the individual steps:
+        run: |
+          if npm run | grep -q "^  i18n$"; then
+            npm run i18n
+          else
+            npm run i18n:auto
+            npm run i18n:merge
+            npm run i18n:fallback
+            npm run i18n:publish
+          fi
+
+      # Optional: regenerate pages with fresh translations so artifacts can be uploaded if you want
+      - name: Generate pages (Pass 2 - consume translations)
+        run: npm run pages
+
+      # Optional: upload generated artifacts (helpful for debugging/preview)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: generated-pages
+          path: generated-content/
