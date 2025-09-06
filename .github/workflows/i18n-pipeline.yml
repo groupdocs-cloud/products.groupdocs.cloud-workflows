@@ -46,19 +46,22 @@ jobs:
       - name: Write Google credentials file
         shell: bash
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/src"
+          # 1) Write the secret into a real file under the 'src' workspace
           printf '%s' "${{ secrets.GOOGLE_CREDENTIALS_JSON }}" > "$GITHUB_WORKSPACE/src/gcloud.json"
+
+          # 2) Export absolute path for subsequent steps
           echo "GOOGLE_APPLICATION_CREDENTIALS=$GITHUB_WORKSPACE/src/gcloud.json" >> "$GITHUB_ENV"
+
+          # 3) Sanity check (prints PATH only, not file contents)
+          echo "GAC path: $GITHUB_WORKSPACE/src/gcloud.json"
+          test -f "$GITHUB_WORKSPACE/src/gcloud.json"
       
       # 5) Run your full local chain (configure → pages → i18n:auto → merge → fallback → publish)
       - name: Run i18n (full chain)
         working-directory: src
         env:
           # Gist PAT (gist:write). Mapped to the env var your script expects.
-          GITHUB_TOKEN: ${{ secrets.GIST_TOKEN }}
-
-          # Google SA JSON path for Translate client
-          GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+          GITHUB_TOKEN: ${{ secrets.GIST_TOKEN }}         
 
           # Optional knobs consumed by your scripts
           MAX_PROCESS_PARALLEL_PAGES: ${{ secrets.MAX_PROCESS_PARALLEL_PAGES }}
