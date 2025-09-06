@@ -43,6 +43,13 @@ jobs:
             npm install
           fi      
 
+      - name: Write Google credentials file
+        shell: bash
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/src"
+          printf '%s' "${{ secrets.GOOGLE_CREDENTIALS_JSON }}" > "$GITHUB_WORKSPACE/src/gcloud.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$GITHUB_WORKSPACE/src/gcloud.json" >> "$GITHUB_ENV"
+      
       # 5) Run your full local chain (configure → pages → i18n:auto → merge → fallback → publish)
       - name: Run i18n (full chain)
         working-directory: src
