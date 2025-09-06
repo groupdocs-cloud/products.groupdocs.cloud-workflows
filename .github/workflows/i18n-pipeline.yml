@@ -41,13 +41,9 @@ jobs:
             npm ci
           else
             npm install
-          fi
+          fi      
 
-      # 5) Materialize Google creds file from secret (no file committed)
-      - name: Write Google credentials file
-        run: echo "${{ secrets.GOOGLE_CREDENTIALS_JSON }}" > $HOME/gcloud.json
-
-      # 6) Run your full local chain (configure → pages → i18n:auto → merge → fallback → publish)
+      # 5) Run your full local chain (configure → pages → i18n:auto → merge → fallback → publish)
       - name: Run i18n (full chain)
         working-directory: src
         env:
@@ -55,7 +51,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GIST_TOKEN }}
 
           # Google SA JSON path for Translate client
-          GOOGLE_APPLICATION_CREDENTIALS: $HOME/gcloud.json
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
 
           # Optional knobs consumed by your scripts
           MAX_PROCESS_PARALLEL_PAGES: ${{ secrets.MAX_PROCESS_PARALLEL_PAGES }}
@@ -64,12 +60,12 @@ jobs:
           # GIST_ID: ${{ secrets.GIST_ID }}
         run: npm run i18n
 
-      # 7) (Optional) Re-run pages to materialize with freshest strings (harmless if npm run i18n already did it)
+      # 6) (Optional) Re-run pages to materialize with freshest strings (harmless if npm run i18n already did it)
       # - name: Generate pages (optional)
       #   working-directory: src
       #   run: npm run pages
 
-      # 8) (Optional) Upload generated content for inspection/debug
+      # 7) (Optional) Upload generated content for inspection/debug
       - name: Upload generated content (optional)
         if: always()
         uses: actions/upload-artifact@v4
