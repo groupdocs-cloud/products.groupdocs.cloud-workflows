@@ -30,8 +30,8 @@ jobs:
 
       # If your local `npm run i18n` ALREADY runs pages first, you can skip this step.
       # If not sure, keep Pass 1 to ensure missing.json is populated in CI.
-      - name: Generate pages (Pass 1 - populate missing keys)
-        run: npm run pages
+      #- name: Generate pages (Pass 1 - populate missing keys)
+      #  run: npm run pages
 
       - name: Run i18n (auto → merge → fallback → publish)
         env:
