@@ -106,4 +106,4 @@ jobs:
                --output /dev/null \
                -d "{\"website\":\"$URL\"}" \
                -H "Content-Type: application/json" \
-               -X POST "$API_ENDPOINT 
+               -X POST "$API_ENDPOINT"
