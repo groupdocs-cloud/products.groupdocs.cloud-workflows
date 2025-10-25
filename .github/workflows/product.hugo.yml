@@ -65,7 +65,7 @@ jobs:
       - run: npm install
       - run: npm run configure
       - run: npm run pages
-        run: npm run sitemaps      
+      - run: npm run sitemaps      
       - name: Download content
         run: wget http://products.groupdocs.cloud.s3-website.us-west-2.amazonaws.com/generated.zip
       - name: Extract content
