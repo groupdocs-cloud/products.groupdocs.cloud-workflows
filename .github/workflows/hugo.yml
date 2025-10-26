@@ -1,4 +1,5 @@
 name: Hugo
+run-name: Hugo (${{ github.event.inputs.environment }})
 
 on:
   workflow_dispatch:
