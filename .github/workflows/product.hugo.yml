@@ -46,6 +46,7 @@ jobs:
       AWS_ENDPOINT_URL: ${{ secrets.AWS_ENDPOINT_URL }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+      SITE_URL: ${{ secrets.SITE_URL }}
       CONFIGURE_ONE_LANGUAGE: ${{ matrix.configure_one_language }}
       CONFIGURE_ONE_PRODUCT: ${{ github.event.inputs.product }}
 
