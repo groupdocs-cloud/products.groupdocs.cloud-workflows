@@ -88,11 +88,33 @@ jobs:
 
       - name: Corpus size
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          echo "=== file counts ==="
           echo "committed english pages : $(find content/english -name '*.md' | wc -l)"
           echo "translated-content files: $(find translated-content -name '*.md' 2>/dev/null | wc -l)"
-          echo "generated-content files : $(find generated-content -name '*.md' 2>/dev/null | wc -l)"
+          echo "generated-content files : $(find generated-content -type f 2>/dev/null | wc -l)"
           echo "total markdown in tree  : $(find content generated-content translated-content -name '*.md' 2>/dev/null | wc -l)"
+
+          echo "=== raw bytes on disk ==="
+          du -sh content generated-content translated-content 2>/dev/null || true
+
+          echo "=== markdown files per product (top 12) ==="
+          for d in content/english/*/; do
+            printf '%9s  %s\n' "$(find "$d" -name '*.md' 2>/dev/null | wc -l)" "$(basename "$d")"
+          done | sort -rn | head -12
+
+          echo "=== what git would actually store ==="
+          echo "-- before staging --"
+          git count-objects -vH | grep -E "^(count|size|in-pack|size-pack):"
+          # The generated pages are gitignored, so -f is required to stage them.
+          git add -Af content generated-content translated-content 2>/dev/null || true
+          echo "-- after staging the corpus (loose, zlib per file) --"
+          git count-objects -vH | grep -E "^(count|size|in-pack|size-pack):"
+          echo "-- after repack (delta compression across near-identical pages) --"
+          git repack -adq 2>/dev/null || true
+          git count-objects -vH | grep -E "^(count|size|in-pack|size-pack):"
+          # Leave the tree as found so the builds below are unaffected.
+          git reset -q
 
       # configure.cjs wrote config.json above; drop it so each measured build
       # is driven only by the hugo.json it writes.
