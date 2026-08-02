@@ -104,11 +104,16 @@ jobs:
       SITE_URL: ${{ secrets.SITE_URL }}
 
     steps:
+      # fetch-depth 0 is required, not a preference: sitemap lastmod comes from
+      # each file's last commit, and in a shallow clone every file reports the
+      # tip commit instead - so all 87k URLs would share one timestamp that
+      # changes on every push. Full history is ~45 MiB packed.
       - uses: actions/checkout@v4
         with:
           repository: groupdocs-cloud/products.groupdocs.cloud
           ref: ${{ inputs.branch }}
           token: ${{ secrets.REPO_TOKEN }}
+          fetch-depth: 0
 
       - name: Assert the expected commit
         if: inputs.expected_commit != ''
