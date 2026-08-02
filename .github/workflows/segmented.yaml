@@ -1,0 +1,160 @@
+name: Segmented build experiment
+run-name: Segments experiment (${{ inputs.product }}/${{ inputs.language }})
+
+# Measures whether Hugo's `segments` feature can replace the config-slicing
+# workarounds, and what it costs. Builds the same site three ways and reports
+# peak memory, wall time and what landed in public/:
+#
+#   1. baseline          - no slicing at all
+#   2. segments only     - full mounts, output filtered by --renderSegments
+#   3. segments + ignore - content excluded at load time as well
+#
+# Nothing is deployed. This writes no files outside the runner.
+
+on:
+  workflow_dispatch:
+    inputs:
+      product:
+        description: Product to slice to
+        type: string
+        default: viewer
+        required: true
+      language:
+        description: Language to slice to
+        type: string
+        default: en
+        required: true
+      generate_pages:
+        description: Run the repo's page generators first (realistic corpus)
+        type: boolean
+        default: true
+      hugo_version:
+        description: Hugo version
+        type: string
+        default: latest
+        required: true
+      branch:
+        description: Content branch to check out
+        type: string
+        default: master
+        required: true
+
+jobs:
+  experiment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      PRODUCT: ${{ inputs.product }}
+      LANGUAGE: ${{ inputs.language }}
+      HUGO_ENVIRONMENT: staging
+      NODE_OPTIONS: --max-old-space-size=11111
+
+    steps:
+      - name: Checkout content
+        uses: actions/checkout@v4
+        with:
+          repository: groupdocs-cloud/products.groupdocs.cloud
+          ref: ${{ inputs.branch }}
+          token: ${{ secrets.REPO_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm install --no-audit --no-fund
+
+      - uses: peaceiris/actions-hugo@v3
+        with:
+          hugo-version: ${{ inputs.hugo_version }}
+          extended: true
+
+      - name: Hugo version
+        run: hugo version
+
+      - name: Generate pages
+        if: inputs.generate_pages
+        run: |
+          set -euo pipefail
+          /usr/bin/time -v npm run pages 2>&1 | tail -40 || true
+
+      - name: Corpus size
+        run: |
+          set -euo pipefail
+          echo "committed english pages : $(find content/english -name '*.md' | wc -l)"
+          echo "translated-content files: $(find translated-content -name '*.md' 2>/dev/null | wc -l)"
+          echo "generated-content files : $(find generated-content -name '*.md' 2>/dev/null | wc -l)"
+          echo "total markdown in tree  : $(find content generated-content translated-content -name '*.md' 2>/dev/null | wc -l)"
+
+      # configure.cjs wrote config.json during `npm run pages`; drop it so each
+      # measured build below is driven only by the hugo.json it writes.
+      - name: Clear generated config
+        run: rm -f config.json
+
+      - name: 1. Baseline — no slicing
+        run: |
+          set -euo pipefail
+          rm -rf public hugo.json
+          /usr/bin/time -v hugo --environment=staging > build.log 2>time.log || {
+            echo "::warning::baseline build failed"; tail -30 build.log time.log; }
+          echo "--- pages"; tail -20 build.log || true
+          echo "--- peak memory"; grep "Maximum resident set size" time.log || true
+          echo "--- wall time";   grep "Elapsed (wall clock)" time.log || true
+          echo "--- files in public"; find public -type f 2>/dev/null | wc -l
+          echo "--- public/ top level"; ls public 2>/dev/null | head -25
+
+      - name: 2. Segments only — full mounts, filtered output
+        run: |
+          set -euo pipefail
+          rm -rf public
+          cat > hugo.json <<JSON
+          {
+            "segments": {
+              "slice": {
+                "includes": [
+                  { "path": "{/$PRODUCT,/$PRODUCT/**}", "lang": "$LANGUAGE" }
+                ]
+              }
+            }
+          }
+          JSON
+          cat hugo.json
+          /usr/bin/time -v hugo --environment=staging --renderSegments slice \
+            > build.log 2>time.log || {
+            echo "::warning::segments build failed"; tail -30 build.log time.log; }
+          echo "--- pages"; tail -20 build.log || true
+          echo "--- peak memory"; grep "Maximum resident set size" time.log || true
+          echo "--- wall time";   grep "Elapsed (wall clock)" time.log || true
+          echo "--- files in public"; find public -type f 2>/dev/null | wc -l
+          echo "--- public/ top level"; ls public 2>/dev/null | head -25
+          echo "--- did it write root files? (the trim question)"
+          for f in index.html robots.txt sitemap.xml 404.html; do
+            [ -f "public/$f" ] && echo "  PRESENT public/$f" || echo "  absent  public/$f"
+          done
+
+      - name: 3. Segments + load-time exclusion
+        run: |
+          set -euo pipefail
+          rm -rf public
+          PRODUCTS=$(ls content/english)
+          IGNORE=$(for p in $PRODUCTS; do [ "$p" != "$PRODUCT" ] && printf '"/%s/",' "$p"; done | sed 's/,$//')
+          cat > hugo.json <<JSON
+          {
+            "ignoreFiles": [ $IGNORE ],
+            "segments": {
+              "slice": {
+                "includes": [
+                  { "path": "{/$PRODUCT,/$PRODUCT/**}", "lang": "$LANGUAGE" }
+                ]
+              }
+            }
+          }
+          JSON
+          cat hugo.json
+          /usr/bin/time -v hugo --environment=staging --renderSegments slice \
+            > build.log 2>time.log || {
+            echo "::warning::segments+ignore build failed"; tail -30 build.log time.log; }
+          echo "--- pages"; tail -20 build.log || true
+          echo "--- peak memory"; grep "Maximum resident set size" time.log || true
+          echo "--- wall time";   grep "Elapsed (wall clock)" time.log || true
+          echo "--- files in public"; find public -type f 2>/dev/null | wc -l
+          echo "--- sample output paths"; find public -type f -name '*.html' 2>/dev/null | head -10
