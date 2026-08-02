@@ -58,6 +58,9 @@ jobs:
       # Set to `en`, helpers.languages collapses to ['en'] and they emit
       # English only — the slice webgentics owns.
       CONFIGURE_ONE_LANGUAGE: ${{ inputs.language }}
+      # Each generator tests its own path against the ignoreFiles this writes
+      # and returns early, so generation is scoped to one product too.
+      CONFIGURE_ONE_PRODUCT: ${{ inputs.product }}
 
     steps:
       - name: Checkout content
