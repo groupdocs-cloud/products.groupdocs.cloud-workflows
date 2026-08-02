@@ -15,6 +15,9 @@ run-name: Hugo Deploy${{ inputs.run_tag && format(' [{0}]', inputs.run_tag) || '
 # `excludeFiles` replaces the mount array wholesale, so one omission silently
 # drops the theme's vendored assets.
 #
+# `deploy: false` stops after the build and reports peak RSS, wall clock and
+# pages written - the numbers that decide how finely the site has to be sliced.
+#
 # Two automated callers share this file and divide by language: webgentics
 # owns `content/english` and deploys `en`; translagent owns
 # `translated-content` and deploys the rest. Their S3 prefixes are disjoint -
@@ -42,6 +45,15 @@ on:
           disable every other language, and cut the slice with ignoreFiles.
         type: string
         required: true
+      deploy:
+        description: Upload and invalidate. Off builds and measures only.
+        type: boolean
+        default: true
+        required: false
+      hugo_version:
+        description: Hugo release to install; empty takes the latest
+        type: string
+        required: false
       run_tag:
         description: Caller's correlation tag, echoed verbatim into the run name
         type: string
@@ -56,6 +68,8 @@ on:
       environment: { type: string, required: true }
       branch: { type: string, required: true }
       hugo_config: { type: string, required: true }
+      deploy: { type: boolean, required: false, default: true }
+      hugo_version: { type: string, required: false }
       run_tag: { type: string, required: false }
       expected_commit: { type: string, required: false }
 
@@ -101,10 +115,31 @@ jobs:
       # data and i18n packages are mounted straight out of node_modules.
       - run: npm install --no-audit --no-fund
 
-      - uses: peaceiris/actions-hugo@v3
-        with:
-          hugo-version: latest
-          extended: true
+      # `hugo deploy` lives only in the `withdeploy` builds, which the usual
+      # setup actions do not install - they ship plain `extended`, and the
+      # deploy step then fails after the whole build has already run.
+      - name: Install Hugo (extended, withdeploy)
+        env:
+          WANTED: ${{ inputs.hugo_version }}
+        run: |
+          set -euo pipefail
+          VERSION="$WANTED"
+          if [ -z "$VERSION" ]; then
+            VERSION=$(curl -fsSL https://api.github.com/repos/gohugoio/hugo/releases/latest \
+              | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>process.stdout.write(JSON.parse(d).tag_name.replace(/^v/,"")))')
+          fi
+          DEB="hugo_extended_withdeploy_${VERSION}_linux-amd64.deb"
+          curl -fsSL -o "$RUNNER_TEMP/$DEB" \
+            "https://github.com/gohugoio/hugo/releases/download/v${VERSION}/${DEB}"
+          sudo dpkg -i "$RUNNER_TEMP/$DEB"
+          hugo version
+          hugo deploy --help >/dev/null 2>&1 \
+            || { echo "::error::installed Hugo has no deploy support"; exit 1; }
+
+      # Peak RSS is the number that decides how finely the site must be sliced,
+      # so measure it rather than infer it.
+      - name: Install GNU time
+        run: command -v /usr/bin/time >/dev/null || sudo apt-get install -y -qq time
 
       # A stale config.json would be read as a second Hugo config file.
       - name: Write and validate hugo.json
@@ -176,7 +211,26 @@ jobs:
             | tee "${GITHUB_STEP_SUMMARY:-/dev/null}"
 
       - name: Build
-        run: hugo --environment=${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          /usr/bin/time -v -o "$RUNNER_TEMP/time.txt" \
+            hugo --environment=${{ inputs.environment }}
+          PEAK_KB=$(awk '/Maximum resident set size/ {print $NF}' "$RUNNER_TEMP/time.txt")
+          WALL=$(awk -F': ' '/Elapsed \(wall clock\)/ {print $2}' "$RUNNER_TEMP/time.txt")
+          PAGES=$(find public -name '*.html' | wc -l)
+          TOTAL_KB=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
+          {
+            echo "### Build"
+            echo
+            echo "| metric | value |"
+            echo "| --- | --- |"
+            echo "| html pages written | $PAGES |"
+            echo "| peak RSS | $((PEAK_KB / 1024)) MiB |"
+            echo "| runner memory | $((TOTAL_KB / 1024)) MiB |"
+            echo "| headroom used | $((PEAK_KB * 100 / TOTAL_KB))% |"
+            echo "| wall clock | $WALL |"
+            echo "| KiB per page | $((PAGES > 0 ? PEAK_KB / PAGES : 0)) |"
+          } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
 
       # Once the slice language is Hugo's default, a non-English build also
       # writes root-level files - the `/` alias, robots.txt, sitemap.xml -
@@ -197,12 +251,14 @@ jobs:
           mv "${RUNNER_TEMP}/$LANG_CODE" "public/$LANG_CODE"
 
       - name: Deploy
+        if: inputs.deploy
         run: hugo deploy --environment=${{ inputs.environment }} --maxDeletes=0
 
       # Derived from the config rather than from inputs, so it invalidates what
       # was actually built. A product whose platforms all survived collapses to
       # one pattern; a partial slice invalidates only the platforms it shipped.
       - name: Invalidate cache
+        if: inputs.deploy
         env:
           API_ENDPOINT: ${{ secrets.CACHE_INVALIDATION_API_ENDPOINT }}
         run: |
