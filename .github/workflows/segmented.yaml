@@ -88,19 +88,28 @@ jobs:
 
       - name: Corpus size
         run: |
-          set -uo pipefail
+          # No `set -e`: the runner already invokes `bash -e`, and a `find`
+          # over a directory the generators never created exits 1, which would
+          # kill the step before it reports anything.
+          set +e
+          # Only the content roots that actually exist on this run.
+          ROOTS=""
+          for d in content generated-content translated-content; do
+            [ -d "$d" ] && ROOTS="$ROOTS $d"
+          done
+          echo "content roots present:$ROOTS"
           echo "=== file counts ==="
           echo "committed english pages : $(find content/english -name '*.md' | wc -l)"
           echo "translated-content files: $(find translated-content -name '*.md' 2>/dev/null | wc -l)"
           echo "generated-content files : $(find generated-content -type f 2>/dev/null | wc -l)"
-          echo "total markdown in tree  : $(find content generated-content translated-content -name '*.md' 2>/dev/null | wc -l)"
+          echo "total markdown in tree  : $(find $ROOTS -name '*.md' 2>/dev/null | wc -l)"
 
           echo "=== raw bytes on disk ==="
-          du -sh content generated-content translated-content 2>/dev/null || true
+          du -sh $ROOTS 2>/dev/null
 
           echo "=== ENGLISH ONLY (webgentics's scope) ==="
           # Generated pages carry a .<lang>.md suffix; authored ones do not.
-          EN_FILES=$(find content generated-content \( -name '*.en.md' -o -name '_index.md' \) 2>/dev/null)
+          EN_FILES=$(find $ROOTS \( -name '*.en.md' -o -name '_index.md' \) 2>/dev/null)
           EN_COUNT=$(echo "$EN_FILES" | grep -c . || true)
           EN_BYTES=$(echo "$EN_FILES" | grep . | xargs -r du -cb 2>/dev/null | tail -1 | cut -f1)
           echo "english files : ${EN_COUNT}"
@@ -108,7 +117,7 @@ jobs:
           [ "${EN_COUNT:-0}" -gt 0 ] && echo "avg per page  : $(( ${EN_BYTES:-0} / EN_COUNT )) bytes"
 
           echo "=== files per language suffix (top 25) ==="
-          find content generated-content -name '*.*.md' 2>/dev/null \
+          find $ROOTS -name '*.*.md' 2>/dev/null \
             | sed -E 's/.*\.([a-z]{2})\.md$/\1/' | sort | uniq -c | sort -rn | head -25
 
           echo "=== markdown files per product (top 12) ==="
@@ -120,7 +129,7 @@ jobs:
           echo "-- before staging --"
           git count-objects -vH | grep -E "^(count|size|in-pack|size-pack):"
           # The generated pages are gitignored, so -f is required to stage them.
-          git add -Af content generated-content translated-content 2>/dev/null || true
+          git add -Af $ROOTS 2>/dev/null
           echo "-- after staging the corpus (loose, zlib per file) --"
           git count-objects -vH | grep -E "^(count|size|in-pack|size-pack):"
           echo "-- after repack (delta compression across near-identical pages) --"
