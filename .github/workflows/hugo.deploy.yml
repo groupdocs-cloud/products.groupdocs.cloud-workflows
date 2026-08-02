@@ -174,8 +174,12 @@ jobs:
           if (lang === 'en' && cfg.defaultContentLanguageInSubdir === true)
             fail('en must publish to the site root, not a subdirectory')
 
-          if (!Array.isArray(cfg.ignoreFiles) || !cfg.ignoreFiles.length)
-            fail('hugo_config must cut the slice with a non-empty ignoreFiles')
+          // An empty ignoreFiles is legitimate for a whole-language build, so
+          // this warns rather than fails - the size check below is the real
+          // guard, and it reports a number instead of a guess.
+          if (!Array.isArray(cfg.ignoreFiles)) fail('ignoreFiles must be an array')
+          else if (!cfg.ignoreFiles.length)
+            console.log('::warning::ignoreFiles is empty - building every product in this language')
           if (cfg.module)
             fail('module.mounts in a root config is ignored by Hugo; config/_default/module.yaml wins')
 
@@ -201,6 +205,17 @@ jobs:
           if (!total) fail('ignoreFiles leaves no product content; nothing would be built')
           console.log(`language ${lang} - ${total} source pages survive ignoreFiles`)
           for (const [p, n] of Object.entries(perProduct)) console.log(`  ${p}: ${n}`)
+
+          // Measured on this runner class: ~160 KiB of peak RSS per page over a
+          // ~350 MiB floor. Predicting it here turns an OOM - which kills the
+          // runner mid-build and reports nothing useful - into a warning.
+          const runnerMib = Math.round(Number(
+            (fs.readFileSync('/proc/meminfo', 'utf8').match(/^MemTotal:\s+(\d+)/m) || [, 0])[1]) / 1024)
+          const predictedMib = Math.round(350 + total * 160 / 1024)
+          const pct = runnerMib ? Math.round(predictedMib * 100 / runnerMib) : 0
+          console.log(`predicted peak ~${predictedMib} MiB of ${runnerMib} MiB (${pct}%)`)
+          if (pct >= 80)
+            console.log(`::warning::predicted peak is ${pct}% of runner memory; slice further if this OOMs`)
           NODE
 
       # The config arrives minified to stay well inside the input size limit,
