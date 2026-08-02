@@ -76,11 +76,15 @@ jobs:
       - name: Hugo version
         run: hugo version
 
+      # Always: `configure` also calls helpers.create_lang_dirs(), which makes
+      # the locales/ and i18n/ directories the module mounts expect. Skipping
+      # it leaves mount sources missing before Hugo ever starts.
+      - name: Configure
+        run: npm run configure
+
       - name: Generate pages
         if: inputs.generate_pages
-        run: |
-          set -euo pipefail
-          /usr/bin/time -v npm run pages 2>&1 | tail -40 || true
+        run: npx npm-run-all pages:multilingual pages:GroupDocs.Viewer pages:GroupDocs.Conversion pages:GroupDocs.Parser "pages:GroupDocs.Parser:Barcode" pages:generate
 
       - name: Corpus size
         run: |
@@ -90,18 +94,23 @@ jobs:
           echo "generated-content files : $(find generated-content -name '*.md' 2>/dev/null | wc -l)"
           echo "total markdown in tree  : $(find content generated-content translated-content -name '*.md' 2>/dev/null | wc -l)"
 
-      # configure.cjs wrote config.json during `npm run pages`; drop it so each
-      # measured build below is driven only by the hugo.json it writes.
+      # configure.cjs wrote config.json above; drop it so each measured build
+      # is driven only by the hugo.json it writes.
       - name: Clear generated config
         run: rm -f config.json
 
       - name: 1. Baseline — no slicing
         run: |
-          set -euo pipefail
+          set -uo pipefail
           rm -rf public hugo.json
-          /usr/bin/time -v hugo --environment=production > build.log 2>time.log || {
-            echo "::warning::baseline build failed"; tail -30 build.log time.log; }
-          echo "--- pages"; tail -20 build.log || true
+          if /usr/bin/time -v hugo --environment=production >build.log 2>time.log; then
+            echo "RESULT: baseline ok"
+          else
+            echo "::warning::baseline build failed (exit $?)"
+            echo "--- hugo stdout"; tail -n 40 build.log
+            echo "--- hugo stderr / time"; tail -n 40 time.log
+          fi
+          echo "--- pages";       tail -n 15 build.log
           echo "--- peak memory"; grep "Maximum resident set size" time.log || true
           echo "--- wall time";   grep "Elapsed (wall clock)" time.log || true
           echo "--- files in public"; find public -type f 2>/dev/null | wc -l
@@ -109,7 +118,7 @@ jobs:
 
       - name: 2. Segments only — full mounts, filtered output
         run: |
-          set -euo pipefail
+          set -uo pipefail
           rm -rf public
           cat > hugo.json <<JSON
           {
@@ -123,25 +132,30 @@ jobs:
           }
           JSON
           cat hugo.json
-          /usr/bin/time -v hugo --environment=production --renderSegments slice \
-            > build.log 2>time.log || {
-            echo "::warning::segments build failed"; tail -30 build.log time.log; }
-          echo "--- pages"; tail -20 build.log || true
+          if /usr/bin/time -v hugo --environment=production --renderSegments slice \
+               >build.log 2>time.log; then
+            echo "RESULT: segments ok"
+          else
+            echo "::warning::segments build failed (exit $?)"
+            echo "--- hugo stdout"; tail -n 40 build.log
+            echo "--- hugo stderr / time"; tail -n 40 time.log
+          fi
+          echo "--- pages";       tail -n 15 build.log
           echo "--- peak memory"; grep "Maximum resident set size" time.log || true
           echo "--- wall time";   grep "Elapsed (wall clock)" time.log || true
           echo "--- files in public"; find public -type f 2>/dev/null | wc -l
           echo "--- public/ top level"; ls public 2>/dev/null | head -25
           echo "--- did it write root files? (the trim question)"
           for f in index.html robots.txt sitemap.xml 404.html; do
-            [ -f "public/$f" ] && echo "  PRESENT public/$f" || echo "  absent  public/$f"
+            if [ -f "public/$f" ]; then echo "  PRESENT public/$f"; else echo "  absent  public/$f"; fi
           done
 
       - name: 3. Segments + load-time exclusion
         run: |
-          set -euo pipefail
+          set -uo pipefail
           rm -rf public
-          PRODUCTS=$(ls content/english)
-          IGNORE=$(for p in $PRODUCTS; do [ "$p" != "$PRODUCT" ] && printf '"/%s/",' "$p"; done | sed 's/,$//')
+          IGNORE=$(for p in $(ls content/english); do
+                     [ "$p" != "$PRODUCT" ] && printf '"/%s/",' "$p"; done | sed 's/,$//')
           cat > hugo.json <<JSON
           {
             "ignoreFiles": [ $IGNORE ],
@@ -155,10 +169,15 @@ jobs:
           }
           JSON
           cat hugo.json
-          /usr/bin/time -v hugo --environment=production --renderSegments slice \
-            > build.log 2>time.log || {
-            echo "::warning::segments+ignore build failed"; tail -30 build.log time.log; }
-          echo "--- pages"; tail -20 build.log || true
+          if /usr/bin/time -v hugo --environment=production --renderSegments slice \
+               >build.log 2>time.log; then
+            echo "RESULT: segments+ignore ok"
+          else
+            echo "::warning::segments+ignore build failed (exit $?)"
+            echo "--- hugo stdout"; tail -n 40 build.log
+            echo "--- hugo stderr / time"; tail -n 40 time.log
+          fi
+          echo "--- pages";       tail -n 15 build.log
           echo "--- peak memory"; grep "Maximum resident set size" time.log || true
           echo "--- wall time";   grep "Elapsed (wall clock)" time.log || true
           echo "--- files in public"; find public -type f 2>/dev/null | wc -l
