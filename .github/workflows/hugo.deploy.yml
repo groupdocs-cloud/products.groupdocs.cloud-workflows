@@ -54,6 +54,13 @@ on:
         description: Hugo release to install; empty takes the latest
         type: string
         required: false
+      runner:
+        description: >-
+          Runner label. A self-hosted runner needing several labels should be
+          given one distinguishing label instead - this takes a single value.
+        type: string
+        default: ubuntu-latest
+        required: false
       run_tag:
         description: Caller's correlation tag, echoed verbatim into the run name
         type: string
@@ -70,6 +77,7 @@ on:
       hugo_config: { type: string, required: true }
       deploy: { type: boolean, required: false, default: true }
       hugo_version: { type: string, required: false }
+      runner: { type: string, required: false, default: ubuntu-latest }
       run_tag: { type: string, required: false }
       expected_commit: { type: string, required: false }
 
@@ -77,7 +85,14 @@ jobs:
   build:
     # Linux, not macOS: the big heap was for the page generators, and they are
     # gone. This is a render and an upload.
-    runs-on: ubuntu-latest
+    #
+    # The `||` matters: the input default only applies to a dispatch that omits
+    # it, so a caller passing an empty string would otherwise leave runs-on
+    # empty and fail the job before any step runs. Note that a bigger runner
+    # changes the memory envelope, so a slice sized for one is not necessarily
+    # safe on another - the build step reports peak RSS against this runner's
+    # own MemTotal for exactly that reason.
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
     environment: ${{ inputs.environment }}
     env:
       NODE_ENV: ${{ inputs.environment }}
