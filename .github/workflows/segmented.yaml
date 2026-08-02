@@ -46,7 +46,12 @@ jobs:
     env:
       PRODUCT: ${{ inputs.product }}
       LANGUAGE: ${{ inputs.language }}
-      HUGO_ENVIRONMENT: staging
+      # The generators gate on this: `helpers.isProduction` is
+      # HUGO_ENVIRONMENT === 'production' || NODE_ENV === 'production', and the
+      # viewer/conversion generators emit only docx pages without it — which
+      # would make every measurement below meaningless.
+      HUGO_ENVIRONMENT: production
+      NODE_ENV: production
       NODE_OPTIONS: --max-old-space-size=11111
 
     steps:
@@ -94,7 +99,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf public hugo.json
-          /usr/bin/time -v hugo --environment=staging > build.log 2>time.log || {
+          /usr/bin/time -v hugo --environment=production > build.log 2>time.log || {
             echo "::warning::baseline build failed"; tail -30 build.log time.log; }
           echo "--- pages"; tail -20 build.log || true
           echo "--- peak memory"; grep "Maximum resident set size" time.log || true
@@ -118,7 +123,7 @@ jobs:
           }
           JSON
           cat hugo.json
-          /usr/bin/time -v hugo --environment=staging --renderSegments slice \
+          /usr/bin/time -v hugo --environment=production --renderSegments slice \
             > build.log 2>time.log || {
             echo "::warning::segments build failed"; tail -30 build.log time.log; }
           echo "--- pages"; tail -20 build.log || true
@@ -150,7 +155,7 @@ jobs:
           }
           JSON
           cat hugo.json
-          /usr/bin/time -v hugo --environment=staging --renderSegments slice \
+          /usr/bin/time -v hugo --environment=production --renderSegments slice \
             > build.log 2>time.log || {
             echo "::warning::segments+ignore build failed"; tail -30 build.log time.log; }
           echo "--- pages"; tail -20 build.log || true
