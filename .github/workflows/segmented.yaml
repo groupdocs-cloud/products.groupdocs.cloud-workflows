@@ -53,6 +53,11 @@ jobs:
       HUGO_ENVIRONMENT: production
       NODE_ENV: production
       NODE_OPTIONS: --max-old-space-size=11111
+      # What `configure.cjs` and the generators actually read. Without it the
+      # generators emit every language: conversion alone is 1.6M pages, ~6h.
+      # Set to `en`, helpers.languages collapses to ['en'] and they emit
+      # English only — the slice webgentics owns.
+      CONFIGURE_ONE_LANGUAGE: ${{ inputs.language }}
 
     steps:
       - name: Checkout content
