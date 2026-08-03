@@ -50,7 +50,12 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # The runner belongs to the site, not to the request, so it comes from an
+    # Actions variable rather than an input - a caller never names it. Set
+    # RUNS_ON at repository or environment level to move builds onto a bigger
+    # or self-hosted runner; environment scope lets staging and production
+    # differ. Unset, it stays on ubuntu-latest.
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
     environment: ${{ inputs.environment }}
     env:
       NODE_ENV: ${{ inputs.environment }}
@@ -256,11 +261,36 @@ jobs:
           rm -rf public && mkdir public
           mv "${RUNNER_TEMP}/$LANG_CODE" "public/$LANG_CODE"
 
-      - name: Deploy
-        run: hugo deploy --environment=${{ inputs.environment }} --maxDeletes=0
+      # STUB - uploads nothing. Reports what a real deploy would ship so the
+      # rest of the pipeline can be exercised without touching the bucket.
+      # Replace the body with:
+      #   hugo deploy --environment=${{ inputs.environment }} --maxDeletes=0
+      - name: Deploy (stub)
+        run: |
+          set -euo pipefail
+          TARGET=$(node -e '
+            const fs=require("fs"), yaml=require("js-yaml");
+            const f=`config/${process.argv[1]}/deployment.yaml`;
+            try { process.stdout.write(yaml.load(fs.readFileSync(f,"utf8")).targets[0].url) }
+            catch (e) { process.stdout.write("(no target configured)") }
+          ' "${{ inputs.environment }}")
+          {
+            echo "### Deploy (stub - nothing uploaded)"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| would upload to | \`$TARGET\` |"
+            echo "| files | $(find public -type f | wc -l) |"
+            echo "| size | $(du -sh public | cut -f1) |"
+            echo "| html pages | $(find public -name '*.html' | wc -l) |"
+          } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
 
       # Derived from the segments actually built, so it purges what shipped.
-      - name: Invalidate cache
+      #
+      # STUB - posts nothing, since the deploy above uploads nothing. The URL
+      # derivation is real and is what a live run would purge. To go live,
+      # drop the `echo` guard on the curl below.
+      - name: Invalidate cache (stub)
         env:
           API_ENDPOINT: ${{ secrets.CACHE_INVALIDATION_API_ENDPOINT }}
           SEGMENTS: ${{ inputs.segments }}
@@ -282,11 +312,16 @@ jobs:
           const out = paths.map(p => (p ? `${prefix}/${p}/*` : `${prefix}/*`))
           process.stdout.write([...new Set(out)].join('\n') + '\n')
           NODE
-          while read -r path; do
-            [ -n "$path" ] || continue
-            echo "invalidating $BASE_URL$path"
-            curl --silent --show-error --fail --output /dev/null \
-                 -d "{\"website\":\"$BASE_URL$path\"}" \
-                 -H "Content-Type: application/json" \
-                 -X POST "$API_ENDPOINT"
-          done < "$RUNNER_TEMP/targets.txt"
+          {
+            echo "### Cache invalidation (stub - nothing posted)"
+            echo
+            while read -r path; do
+              [ -n "$path" ] || continue
+              echo "- \`$BASE_URL$path\`"
+              echo "would invalidate $BASE_URL$path" >&2
+              # curl --silent --show-error --fail --output /dev/null \
+              #      -d "{\"website\":\"$BASE_URL$path\"}" \
+              #      -H "Content-Type: application/json" \
+              #      -X POST "$API_ENDPOINT"
+            done < "$RUNNER_TEMP/targets.txt"
+          } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
