@@ -273,16 +273,11 @@ jobs:
           if [ "${{ inputs.environment }}" = "production" ]; then
             BASE_URL="https://products.groupdocs.cloud"
           fi
-          node - > "$RUNNER_TEMP/targets.txt" <<'NODE'
-          const fs = require('fs')
-          const cfg = JSON.parse(fs.readFileSync('hugo.json', 'utf8'))
-          const lang = cfg.defaultContentLanguage
-          const prefix = lang === 'en' ? '' : `/${lang}`
-          const paths = fs.readFileSync(process.env.RUNNER_TEMP + '/slice-paths.txt', 'utf8')
-            .split('\n').map(s => s.trim()).filter(Boolean)
-          const out = paths.map(p => `${prefix}/${p}/*`)
-          process.stdout.write([...new Set(out)].join('\n') + '\n')
-          NODE
+          # configure wrote these as URL paths, language prefix included, so
+          # there is nothing to reconstruct here.
+          if [ ! -s "$RUNNER_TEMP/slice-paths.txt" ]; then
+            echo "::error::configure produced no publish paths"; exit 1
+          fi
           {
             echo "### Cache invalidation (stub - nothing posted)"
             echo
@@ -294,5 +289,5 @@ jobs:
               #      -d "{\"website\":\"$BASE_URL$path\"}" \
               #      -H "Content-Type: application/json" \
               #      -X POST "$API_ENDPOINT"
-            done < "$RUNNER_TEMP/targets.txt"
+            done < "$RUNNER_TEMP/slice-paths.txt"
           } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
