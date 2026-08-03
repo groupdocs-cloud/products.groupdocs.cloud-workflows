@@ -1,22 +1,30 @@
 name: Parameterized Deploy
 run-name: Deploy [${{ inputs.run_tag }}] ${{ inputs.segments }} @ ${{ inputs.ref }} (${{ inputs.environment }})
 
-# Deploy one slice of the site, named by content path rather than by config.
+# Deploy one slice of the site, named by segment.
 #
-# The caller says *what* to publish; this workflow decides *how*. Segmentation,
-# ignoreFiles, which languages get disabled and where a language publishes are
-# all derived here, so a caller never encodes Hugo's rules and never has to
-# change when they move.
+# Segments are defined in the content repository, in Hugo's own
+# config/_default/segments.yaml. That file is the single definition: this
+# workflow reads it at the checked-out ref, and so does any caller deciding
+# which segment a changed page belongs to. Same file, same commit - there is
+# no second copy to drift.
 #
-#   segments: conversion/net              one platform, English
-#   segments: conversion/net,viewer       two slices in one run
-#   segments: en                          the whole English site
-#   segments: fr/viewer                   French viewer, published under /fr/
+#   segments: conversion-net              one segment
+#   segments: conversion-net,viewer       two segments in one run
+#   segments: fr:viewer                   the viewer segment, French
 #
-# A segment is a path under the content root. A leading language code selects
-# the language; without one the segment is English. One run renders one
-# language - Hugo cannot disable its own default content language - so a
-# mixed-language list is rejected rather than half-honoured.
+# A segment is `[<lang>:]<name>`; without a language it is English. One run
+# renders one language - Hugo cannot disable its own default content language -
+# so a mixed-language list is rejected rather than half-honoured.
+#
+# Hugo's segments filter *rendering*, not loading, so --renderSegments alone
+# leaves the whole site in memory. The path globs are therefore also translated
+# into ignoreFiles, which excludes at load time and is what actually bounds
+# memory. Anything a segment expresses that ignoreFiles cannot - a kind or
+# output filter, excludes, a non-prefix glob - is refused rather than
+# approximated, because a slice looser than intended is OOM-killed minutes in
+# rather than failing fast. If Hugo ever excludes at load time, delete the
+# translation and keep every definition.
 
 on:
   workflow_dispatch:
@@ -36,9 +44,11 @@ on:
         default: master
         required: true
       segments:
-        description: Comma-separated content paths, e.g. `conversion/net` or `en`
+        description: >-
+          Comma-separated segment names from the content repo's
+          config/_default/segments.yaml, optionally `<lang>:` prefixed.
+          e.g. `conversion-net` or `fr:viewer`
         type: string
-        default: en
         required: true
 
   workflow_call:
@@ -123,42 +133,69 @@ jobs:
           const fail = m => { console.error(`::error::${m}`); process.exit(1) }
           if (!raw.length) fail('segments is empty')
 
+          const SEG_FILE = 'config/_default/segments.yaml'
+          if (!fs.existsSync(SEG_FILE)) fail(`no segment definitions at ${SEG_FILE}`)
+          const defs = yaml.load(fs.readFileSync(SEG_FILE, 'utf8')) || {}
           const languages = Object.keys(yaml.load(
             fs.readFileSync('config/_default/languages.yaml', 'utf8')))
 
-          const parsed = raw.map(seg => {
-            const parts = seg.replace(/^\/+|\/+$/g, '').split('/').filter(Boolean)
-            if (!parts.length) fail(`empty segment in "${seg}"`)
-            if (languages.includes(parts[0])) return { lang: parts[0], path: parts.slice(1).join('/') }
-            return { lang: 'en', path: parts.join('/') }
+          // `[<lang>:]<name>` - the language is orthogonal to the slice.
+          const pairs = raw.map(tok => {
+            const i = tok.indexOf(':')
+            if (i < 0) return { lang: 'en', name: tok }
+            const lang = tok.slice(0, i)
+            if (!languages.includes(lang)) fail(`unknown language "${lang}" in "${tok}"`)
+            return { lang, name: tok.slice(i + 1) }
           })
-
-          const langs = [...new Set(parsed.map(p => p.lang))]
+          const langs = [...new Set(pairs.map(p => p.lang))]
           if (langs.length > 1)
             fail(`segments span several languages (${langs.join(', ')}); one language per run`)
           const lang = langs[0]
 
-          const paths = parsed.map(p => p.path).filter(Boolean)
-          const ignoreFiles = []
-          if (paths.length) {
-            for (const p of paths) {
-              if (!fs.existsSync(`${CONTENT_ROOT}/${p}`)) fail(`segment path does not exist: ${p}`)
-            }
-            // Exclude every directory no segment reaches into. Recursion stops
-            // where a directory is wholly kept, so the list is the shortest one
-            // that expresses this slice.
-            const covered = p => paths.some(s => s === p || p.startsWith(s + '/'))
-            const partial = p => paths.some(s => s.startsWith(p + '/'))
-            ;(function walk (relDir, absDir) {
-              for (const e of fs.readdirSync(absDir, { withFileTypes: true })) {
-                if (!e.isDirectory()) continue
-                const rel = relDir ? `${relDir}/${e.name}` : e.name
-                if (covered(rel)) continue
-                if (partial(rel)) walk(rel, `${absDir}/${e.name}`)
-                else ignoreFiles.push(`/${rel}/`)
+          // `/p/**` is a subtree; a bare `/p` is that one page. Conflating them
+          // would turn `/conversion` from two pages into eighty-four thousand.
+          const subtree = new Set(), exact = new Set()
+          for (const { name } of pairs) {
+            const seg = defs[name]
+            if (!seg) fail(`unknown segment "${name}"; defined: ${Object.keys(defs).join(', ')}`)
+            if (seg.excludes) fail(`segment "${name}" uses excludes, which ignoreFiles cannot express`)
+            if (!Array.isArray(seg.includes) || !seg.includes.length)
+              fail(`segment "${name}" has no includes`)
+            for (const filter of seg.includes) {
+              const extra = Object.keys(filter).filter(k => k !== 'path')
+              if (extra.length)
+                fail(`segment "${name}" filters on ${extra.join(', ')}, which ignoreFiles cannot express`)
+              for (const alt of filter.path.replace(/^\{|\}$/g, '').split(',').map(s => s.trim())) {
+                const m = alt.match(/^\/([^*{}]+?)(\/\*\*)?$/)
+                if (!m) fail(`segment "${name}" path "${alt}" is not a plain prefix; cannot translate`)
+                ;(m[2] ? subtree : exact).add(m[1].replace(/\/+$/, ''))
               }
-            })('', CONTENT_ROOT)
+            }
           }
+          for (const p of [...subtree, ...exact]) {
+            if (!fs.existsSync(`${CONTENT_ROOT}/${p}`)) fail(`segment path does not exist: ${p}`)
+          }
+
+          // Exclude every directory no segment reaches into; stop recursing
+          // where one is wholly kept, so the list is the shortest that fits.
+          const covered = rel => [...subtree].some(s => s === rel || rel.startsWith(s + '/'))
+          const reaches = rel => [...subtree, ...exact].some(s => s === rel || s.startsWith(rel + '/'))
+          const ignoreFiles = []
+          ;(function walk (relDir, absDir) {
+            for (const e of fs.readdirSync(absDir, { withFileTypes: true })) {
+              if (!e.isDirectory()) continue
+              const rel = relDir ? `${relDir}/${e.name}` : e.name
+              if (covered(rel)) continue
+              if (reaches(rel)) walk(rel, `${absDir}/${e.name}`)
+              else ignoreFiles.push(`/${rel}/`)
+            }
+          })('', CONTENT_ROOT)
+
+          // Names for --renderSegments, and paths for cache invalidation.
+          fs.writeFileSync(process.env.RUNNER_TEMP + '/render-segments.txt',
+            pairs.map(p => p.name).join(','))
+          fs.writeFileSync(process.env.RUNNER_TEMP + '/slice-paths.txt',
+            [...new Set([...subtree, ...exact])].join('\n'))
 
           process.stdout.write(JSON.stringify({
             defaultContentLanguage: lang,
@@ -233,7 +270,12 @@ jobs:
       - name: Build
         run: |
           set -euo pipefail
-          /usr/bin/time -v -o "$RUNNER_TEMP/time.txt" hugo --environment=${{ inputs.environment }}
+          # ignoreFiles bounds what is loaded; --renderSegments makes Hugo emit
+          # exactly this segment's pages, so a slice does not also rewrite the
+          # site-root files that every other slice would overwrite.
+          RENDER=$(cat "$RUNNER_TEMP/render-segments.txt")
+          /usr/bin/time -v -o "$RUNNER_TEMP/time.txt" \
+            hugo --environment=${{ inputs.environment }} --renderSegments "$RENDER"
           PEAK_KB=$(awk '/Maximum resident set size/ {print $NF}' "$RUNNER_TEMP/time.txt")
           WALL=$(awk -F': ' '/Elapsed \(wall clock\)/ {print $2}' "$RUNNER_TEMP/time.txt")
           PAGES=$(find public -name '*.html' | wc -l)
@@ -305,11 +347,9 @@ jobs:
           const cfg = JSON.parse(fs.readFileSync('hugo.json', 'utf8'))
           const lang = cfg.defaultContentLanguage
           const prefix = lang === 'en' ? '' : `/${lang}`
-          const langs = new Set(cfg.disableLanguages.concat(lang))
-          const paths = process.env.SEGMENTS.split(',').map(s => s.trim()).filter(Boolean)
-            .map(s => s.replace(/^\/+|\/+$/g, '').split('/').filter(Boolean))
-            .map(p => (langs.has(p[0]) ? p.slice(1) : p).join('/'))
-          const out = paths.map(p => (p ? `${prefix}/${p}/*` : `${prefix}/*`))
+          const paths = fs.readFileSync(process.env.RUNNER_TEMP + '/slice-paths.txt', 'utf8')
+            .split('\n').map(s => s.trim()).filter(Boolean)
+          const out = paths.map(p => `${prefix}/${p}/*`)
           process.stdout.write([...new Set(out)].join('\n') + '\n')
           NODE
           {
