@@ -56,6 +56,10 @@ on:
           e.g. `conversion-net` or `fr:viewer`
         type: string
         required: true
+      dry_run:
+        description: Build and report what would ship, without uploading
+        type: boolean
+        default: false
 
   workflow_call:
     inputs:
@@ -63,6 +67,7 @@ on:
       environment: { type: string, required: true }
       ref: { type: string, required: true }
       segments: { type: string, required: true }
+      dry_run: { type: boolean, required: false, default: false }
 
 jobs:
   build:
@@ -227,14 +232,11 @@ jobs:
           } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
 
 
-      # STUB - uploads nothing. Reports what a real deploy would ship so the
-      # rest of the pipeline can be exercised without touching the bucket.
-      # Replace the body with:
-      #   hugo deploy --environment=${{ inputs.environment }}
-      # maxDeletes lives in the content repo's config/_default/deployment.yaml,
-      # so a slice cannot delete the rest of the site whether or not a caller
-      # remembers the flag.
-      - name: Deploy (stub)
+      # A slice's public/ holds only its own pages, so every other object in
+      # the bucket looks to Hugo like a deletion. --maxDeletes 0 is what stops
+      # it acting on that; the content repo's config/_default/deployment.yaml
+      # sets the same value, and the flag makes it independent of the config.
+      - name: Deploy
         run: |
           set -euo pipefail
           TARGET=$(node -e '
@@ -244,21 +246,24 @@ jobs:
             catch (e) { process.stdout.write("(no target configured)") }
           ' "${{ inputs.environment }}")
           {
-            echo "### Deploy (stub - nothing uploaded)"
+            echo "### Deploy${{ inputs.dry_run && ' (dry run - nothing uploaded)' || '' }}"
             echo
             echo "| | |"
             echo "| --- | --- |"
-            echo "| would upload to | \`$TARGET\` |"
+            echo "| target | \`$TARGET\` |"
             echo "| files | $(find public -type f | wc -l) |"
             echo "| size | $(du -sh public | cut -f1) |"
             echo "| html pages | $(find public -name '*.html' | wc -l) |"
           } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+          hugo deploy \
+            --environment=${{ inputs.environment }} \
+            --maxDeletes 0 \
+            ${{ inputs.dry_run && '--dryRun' || '' }}
 
       # Derived from the segments actually built, so it purges what shipped.
       #
-      # STUB - posts nothing, since the deploy above uploads nothing. The URL
-      # derivation is real and is what a live run would purge. To go live,
-      # drop the `echo` guard on the curl below.
+      # STUB - posts nothing. The URL derivation is real and is what a live run
+      # would purge. To go live, drop the `echo` guard on the curl below.
       - name: Invalidate cache (stub)
         env:
           API_ENDPOINT: ${{ secrets.CACHE_INVALIDATION_API_ENDPOINT }}
