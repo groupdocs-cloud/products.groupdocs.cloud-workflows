@@ -102,9 +102,20 @@ jobs:
 
       - name: Report what was checked out
         run: |
-          echo "ref input : ${{ inputs.ref }}"
-          echo "resolved  : $(git rev-parse HEAD)"
-          echo "describes : $(git describe --all --always HEAD)"
+          set -euo pipefail
+          {
+            echo "# ${{ inputs.dry_run && 'Dry run' || 'Deploy' }} &middot; \`${{ inputs.segments }}\` &rarr; ${{ inputs.environment }}"
+            echo
+            echo "| Request | |"
+            echo "| :--- | :--- |"
+            echo "| Run tag | \`${{ inputs.run_tag }}\` |"
+            echo "| Segments | \`${{ inputs.segments }}\` |"
+            echo "| Environment | \`${{ inputs.environment }}\` |"
+            echo "| Ref requested | \`${{ inputs.ref }}\` |"
+            echo "| Commit | [\`$(git rev-parse --short HEAD)\`](${{ github.server_url }}/groupdocs-cloud/products.groupdocs.cloud/commit/$(git rev-parse HEAD)) $(git log -1 --format=%s | cut -c1-64) |"
+            echo "| Authored | $(git log -1 --format=%ad --date=format:'%Y-%m-%d %H:%M') |"
+            echo
+          } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
 
       - uses: actions/setup-node@v4
         with:
@@ -155,11 +166,13 @@ jobs:
       - name: Verify the slice took effect
         run: |
           set -euo pipefail
-          node -e 'console.log(JSON.stringify(require("./hugo.json"), null, 2))' \
-            | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
           hugo config > "$RUNNER_TEMP/effective.txt" 2>/dev/null
           node - <<'NODE'
           const fs = require('fs')
+          // Everything readable goes to the job summary as well as the log; the
+          // ::error:: annotations stay on stdout, where Actions picks them up.
+          const summary = process.env.GITHUB_STEP_SUMMARY
+          const say = s => { console.log(s); if (summary) fs.appendFileSync(summary, s + '\n') }
           const want = JSON.parse(fs.readFileSync('hugo.json', 'utf8'))
           const eff = fs.readFileSync(process.env.RUNNER_TEMP + '/effective.txt', 'utf8')
           const list = key => {
@@ -196,8 +209,6 @@ jobs:
             if (n) { per[d.name] = n; total += n }
           }
           if (!total) { console.log('::error::this slice selects no content'); process.exit(1) }
-          console.log(`${total} source pages selected`)
-          for (const [p, n] of Object.entries(per)) console.log(`  ${p}: ${n}`)
 
           // ~160 KiB of peak RSS per page over a ~350 MiB floor, measured on
           // this runner class. Cheaper to warn than to be OOM-killed at 90%.
@@ -205,7 +216,29 @@ jobs:
             .match(/^MemTotal:\s+(\d+)/m) || [, 0])[1]) / 1024)
           const predicted = Math.round(350 + total * 160 / 1024)
           const pct = runnerMib ? Math.round(predicted * 100 / runnerMib) : 0
-          console.log(`predicted peak ~${predicted} MiB of ${runnerMib} MiB (${pct}%)`)
+
+          say('## Slice')
+          say('')
+          say('| Content directory | Source pages |')
+          say('| :--- | ---: |')
+          for (const [p, n] of Object.entries(per).sort((a, b) => b[1] - a[1]))
+            say(`| \`${p}\` | ${n.toLocaleString()} |`)
+          say(`| **Total** | **${total.toLocaleString()}** |`)
+          say('')
+          say(`Renders \`${want.renderSegments.join('`, `')}\`. `
+            + `Excluded at load time: ${want.ignoreFiles.length} content `
+            + `directories, ${want.disableLanguages.length} languages. `
+            + `Predicted peak **${predicted.toLocaleString()} MiB** of `
+            + `${runnerMib.toLocaleString()} MiB (${pct}%).`)
+          say('')
+          say('<details><summary>Resolved Hugo configuration</summary>')
+          say('')
+          say('```json')
+          say(JSON.stringify(want, null, 2))
+          say('```')
+          say('')
+          say('</details>')
+          say('')
           if (pct >= 80)
             console.log(`::warning::predicted peak is ${pct}% of runner memory; use narrower segments`)
           NODE
@@ -221,14 +254,15 @@ jobs:
           PEAK_KB=$(awk '/Maximum resident set size/ {print $NF}' "$RUNNER_TEMP/time.txt")
           WALL=$(awk -F': ' '/Elapsed \(wall clock\)/ {print $2}' "$RUNNER_TEMP/time.txt")
           PAGES=$(find public -name '*.html' | wc -l)
+          MAPS=$(find public -name 'sitemap*.xml' | wc -l)
           TOTAL_KB=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
           {
-            echo "| metric | value |"
-            echo "| --- | --- |"
-            echo "| html pages written | $PAGES |"
-            echo "| peak RSS | $((PEAK_KB / 1024)) MiB |"
-            echo "| headroom used | $((PEAK_KB * 100 / TOTAL_KB))% |"
-            echo "| wall clock | $WALL |"
+            echo "## Build"
+            echo
+            echo "| HTML pages | Sitemaps | Peak RSS | Runner headroom used | Wall clock |"
+            echo "| ---: | ---: | ---: | ---: | ---: |"
+            echo "| $PAGES | $MAPS | $((PEAK_KB / 1024)) MiB | $((PEAK_KB * 100 / TOTAL_KB))% | $WALL |"
+            echo
           } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
 
 
@@ -246,14 +280,12 @@ jobs:
             catch (e) { process.stdout.write("(no target configured)") }
           ' "${{ inputs.environment }}")
           {
-            echo "### Deploy${{ inputs.dry_run && ' (dry run - nothing uploaded)' || '' }}"
+            echo "## Upload${{ inputs.dry_run && ' &middot; dry run, nothing written' || '' }}"
             echo
-            echo "| | |"
-            echo "| --- | --- |"
-            echo "| target | \`$TARGET\` |"
-            echo "| files | $(find public -type f | wc -l) |"
-            echo "| size | $(du -sh public | cut -f1) |"
-            echo "| html pages | $(find public -name '*.html' | wc -l) |"
+            echo "| Target | Files | Size | Deletions allowed |"
+            echo "| :--- | ---: | ---: | ---: |"
+            echo "| \`$TARGET\` | $(find public -type f | wc -l) | $(du -sh public | cut -f1) | 0 |"
+            echo
           } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
           hugo deploy \
             --environment=${{ inputs.environment }} \
@@ -280,11 +312,13 @@ jobs:
             echo "::error::configure produced no publish paths"; exit 1
           fi
           {
-            echo "### Cache invalidation (stub - nothing posted)"
+            echo "## Cache invalidation &middot; stub, nothing posted"
             echo
+            echo "| Path |"
+            echo "| :--- |"
             while read -r path; do
               [ -n "$path" ] || continue
-              echo "- \`$BASE_URL$path\`"
+              echo "| \`$BASE_URL$path\` |"
               echo "would invalidate $BASE_URL$path" >&2
               # curl --silent --show-error --fail --output /dev/null \
               #      -d "{\"website\":\"$BASE_URL$path\"}" \
