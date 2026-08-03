@@ -237,7 +237,10 @@ jobs:
       # STUB - uploads nothing. Reports what a real deploy would ship so the
       # rest of the pipeline can be exercised without touching the bucket.
       # Replace the body with:
-      #   hugo deploy --environment=${{ inputs.environment }} --maxDeletes=0
+      #   hugo deploy --environment=${{ inputs.environment }}
+      # maxDeletes lives in the content repo's config/_default/deployment.yaml,
+      # so a slice cannot delete the rest of the site whether or not a caller
+      # remembers the flag.
       - name: Deploy (stub)
         run: |
           set -euo pipefail
