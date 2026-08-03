@@ -1,0 +1,292 @@
+name: Parameterized Deploy
+run-name: Deploy [${{ inputs.run_tag }}] ${{ inputs.segments }} @ ${{ inputs.ref }} (${{ inputs.environment }})
+
+# Deploy one slice of the site, named by content path rather than by config.
+#
+# The caller says *what* to publish; this workflow decides *how*. Segmentation,
+# ignoreFiles, which languages get disabled and where a language publishes are
+# all derived here, so a caller never encodes Hugo's rules and never has to
+# change when they move.
+#
+#   segments: conversion/net              one platform, English
+#   segments: conversion/net,viewer       two slices in one run
+#   segments: en                          the whole English site
+#   segments: fr/viewer                   French viewer, published under /fr/
+#
+# A segment is a path under the content root. A leading language code selects
+# the language; without one the segment is English. One run renders one
+# language - Hugo cannot disable its own default content language - so a
+# mixed-language list is rejected rather than half-honoured.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        description: Caller's correlation tag, echoed into the run name
+        type: string
+        required: true
+      environment:
+        description: Build environment
+        type: environment
+        default: staging
+        required: true
+      ref:
+        description: Branch, tag or commit SHA of the content repository
+        type: string
+        default: master
+        required: true
+      segments:
+        description: Comma-separated content paths, e.g. `conversion/net` or `en`
+        type: string
+        default: en
+        required: true
+
+  workflow_call:
+    inputs:
+      run_tag: { type: string, required: true }
+      environment: { type: string, required: true }
+      ref: { type: string, required: true }
+      segments: { type: string, required: true }
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      NODE_ENV: ${{ inputs.environment }}
+      HUGO_ENVIRONMENT: ${{ inputs.environment }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_ENDPOINT_URL: ${{ secrets.AWS_ENDPOINT_URL }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+      SITE_URL: ${{ secrets.SITE_URL }}
+      CONTENT_ROOT: content/english
+
+    steps:
+      # `ref` takes a branch, a tag or a SHA in one field - actions/checkout
+      # resolves all three. fetch-depth 0 is what makes a bare SHA work at all
+      # (a shallow fetch only carries branch tips), and separately it is what
+      # gives each page its own sitemap lastmod instead of one shared date.
+      - uses: actions/checkout@v4
+        with:
+          repository: groupdocs-cloud/products.groupdocs.cloud
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.REPO_TOKEN }}
+          fetch-depth: 0
+
+      - name: Report what was checked out
+        run: |
+          echo "ref input : ${{ inputs.ref }}"
+          echo "resolved  : $(git rev-parse HEAD)"
+          echo "describes : $(git describe --all --always HEAD)"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm install --no-audit --no-fund
+
+      # `hugo deploy` ships only in the withdeploy builds; the common setup
+      # actions install plain extended, and the deploy then fails after the
+      # whole build has run. Assert it up front instead.
+      - name: Install Hugo (extended, withdeploy)
+        run: |
+          set -euo pipefail
+          VERSION=$(curl -fsSL https://api.github.com/repos/gohugoio/hugo/releases/latest \
+            | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>process.stdout.write(JSON.parse(d).tag_name.replace(/^v/,"")))')
+          DEB="hugo_extended_withdeploy_${VERSION}_linux-amd64.deb"
+          curl -fsSL -o "$RUNNER_TEMP/$DEB" \
+            "https://github.com/gohugoio/hugo/releases/download/v${VERSION}/${DEB}"
+          sudo dpkg -i "$RUNNER_TEMP/$DEB"
+          hugo version
+          hugo deploy --help >/dev/null 2>&1 \
+            || { echo "::error::installed Hugo has no deploy support"; exit 1; }
+
+      - name: Install GNU time
+        run: command -v /usr/bin/time >/dev/null || sudo apt-get install -y -qq time
+
+      - name: Resolve segments into a Hugo config
+        env:
+          SEGMENTS: ${{ inputs.segments }}
+        run: |
+          set -euo pipefail
+          rm -f config.json
+          node - > hugo.json <<'NODE'
+          const fs = require('fs'), yaml = require('js-yaml')
+          const CONTENT_ROOT = process.env.CONTENT_ROOT || 'content/english'
+          const raw = (process.env.SEGMENTS || 'en').split(',').map(s => s.trim()).filter(Boolean)
+          const fail = m => { console.error(`::error::${m}`); process.exit(1) }
+          if (!raw.length) fail('segments is empty')
+
+          const languages = Object.keys(yaml.load(
+            fs.readFileSync('config/_default/languages.yaml', 'utf8')))
+
+          const parsed = raw.map(seg => {
+            const parts = seg.replace(/^\/+|\/+$/g, '').split('/').filter(Boolean)
+            if (!parts.length) fail(`empty segment in "${seg}"`)
+            if (languages.includes(parts[0])) return { lang: parts[0], path: parts.slice(1).join('/') }
+            return { lang: 'en', path: parts.join('/') }
+          })
+
+          const langs = [...new Set(parsed.map(p => p.lang))]
+          if (langs.length > 1)
+            fail(`segments span several languages (${langs.join(', ')}); one language per run`)
+          const lang = langs[0]
+
+          const paths = parsed.map(p => p.path).filter(Boolean)
+          const ignoreFiles = []
+          if (paths.length) {
+            for (const p of paths) {
+              if (!fs.existsSync(`${CONTENT_ROOT}/${p}`)) fail(`segment path does not exist: ${p}`)
+            }
+            // Exclude every directory no segment reaches into. Recursion stops
+            // where a directory is wholly kept, so the list is the shortest one
+            // that expresses this slice.
+            const covered = p => paths.some(s => s === p || p.startsWith(s + '/'))
+            const partial = p => paths.some(s => s.startsWith(p + '/'))
+            ;(function walk (relDir, absDir) {
+              for (const e of fs.readdirSync(absDir, { withFileTypes: true })) {
+                if (!e.isDirectory()) continue
+                const rel = relDir ? `${relDir}/${e.name}` : e.name
+                if (covered(rel)) continue
+                if (partial(rel)) walk(rel, `${absDir}/${e.name}`)
+                else ignoreFiles.push(`/${rel}/`)
+              }
+            })('', CONTENT_ROOT)
+          }
+
+          process.stdout.write(JSON.stringify({
+            defaultContentLanguage: lang,
+            // English owns the site root; every other language owns its prefix.
+            defaultContentLanguageInSubdir: lang !== 'en',
+            disableLanguages: languages.filter(l => l !== lang),
+            ignoreFiles
+          }))
+          NODE
+
+      # config/_default beats a root config file for any key it declares, and
+      # Hugo does not warn when it wins. Assert the slice actually took effect
+      # rather than trust that it did.
+      - name: Verify the slice took effect
+        run: |
+          set -euo pipefail
+          node -e 'console.log(JSON.stringify(require("./hugo.json"), null, 2))' \
+            | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+          hugo config > "$RUNNER_TEMP/effective.txt" 2>/dev/null
+          node - <<'NODE'
+          const fs = require('fs')
+          const want = JSON.parse(fs.readFileSync('hugo.json', 'utf8'))
+          const eff = fs.readFileSync(process.env.RUNNER_TEMP + '/effective.txt', 'utf8')
+          const list = key => {
+            const m = eff.match(new RegExp('^' + key + " = \\[([^\\]]*)\\]", 'mi'))
+            return m ? (m[1].match(/'([^']*)'/g) || []).map(s => s.slice(1, -1)) : []
+          }
+          let bad = false
+          const cmp = (key, expected) => {
+            const got = list(key)
+            if (JSON.stringify([...got].sort()) !== JSON.stringify([...expected].sort())) {
+              console.log(`::error::${key} was overridden by config/_default - wanted ${
+                expected.length} entries, Hugo resolved ${got.length}`)
+              bad = true
+            }
+          }
+          cmp('ignorefiles', want.ignoreFiles)
+          cmp('disablelanguages', want.disableLanguages)
+          if (bad) process.exit(1)
+
+          const res = want.ignoreFiles.map(r => new RegExp(r))
+          const root = process.env.CONTENT_ROOT
+          let total = 0
+          const per = {}
+          for (const d of fs.readdirSync(root, { withFileTypes: true })) {
+            if (!d.isDirectory()) continue
+            let n = 0
+            ;(function walk (dir) {
+              for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+                const p = `${dir}/${e.name}`
+                if (e.isDirectory()) walk(p)
+                else if (p.endsWith('.md') && !res.some(r => r.test(p))) n++
+              }
+            })(`${root}/${d.name}`)
+            if (n) { per[d.name] = n; total += n }
+          }
+          if (!total) { console.log('::error::this slice selects no content'); process.exit(1) }
+          console.log(`${total} source pages selected`)
+          for (const [p, n] of Object.entries(per)) console.log(`  ${p}: ${n}`)
+
+          // ~160 KiB of peak RSS per page over a ~350 MiB floor, measured on
+          // this runner class. Cheaper to warn than to be OOM-killed at 90%.
+          const runnerMib = Math.round(Number((fs.readFileSync('/proc/meminfo', 'utf8')
+            .match(/^MemTotal:\s+(\d+)/m) || [, 0])[1]) / 1024)
+          const predicted = Math.round(350 + total * 160 / 1024)
+          const pct = runnerMib ? Math.round(predicted * 100 / runnerMib) : 0
+          console.log(`predicted peak ~${predicted} MiB of ${runnerMib} MiB (${pct}%)`)
+          if (pct >= 80)
+            console.log(`::warning::predicted peak is ${pct}% of runner memory; use narrower segments`)
+          NODE
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          /usr/bin/time -v -o "$RUNNER_TEMP/time.txt" hugo --environment=${{ inputs.environment }}
+          PEAK_KB=$(awk '/Maximum resident set size/ {print $NF}' "$RUNNER_TEMP/time.txt")
+          WALL=$(awk -F': ' '/Elapsed \(wall clock\)/ {print $2}' "$RUNNER_TEMP/time.txt")
+          PAGES=$(find public -name '*.html' | wc -l)
+          TOTAL_KB=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
+          {
+            echo "| metric | value |"
+            echo "| --- | --- |"
+            echo "| html pages written | $PAGES |"
+            echo "| peak RSS | $((PEAK_KB / 1024)) MiB |"
+            echo "| headroom used | $((PEAK_KB * 100 / TOTAL_KB))% |"
+            echo "| wall clock | $WALL |"
+          } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+
+      # With the slice language as Hugo's default, a non-English build also
+      # writes root-level files - the `/` alias, robots.txt, sitemap.xml -
+      # which would overwrite English's. Keep only this language's prefix.
+      - name: Keep only this language's sub-site
+        run: |
+          set -euo pipefail
+          LANG_CODE=$(node -e 'process.stdout.write(require("./hugo.json").defaultContentLanguage)')
+          if [ "$LANG_CODE" = "en" ]; then echo "en publishes at the root"; exit 0; fi
+          test -d "public/$LANG_CODE" \
+            || { echo "::error::public/$LANG_CODE was not rendered"; exit 1; }
+          mv "public/$LANG_CODE" "${RUNNER_TEMP}/$LANG_CODE"
+          rm -rf public && mkdir public
+          mv "${RUNNER_TEMP}/$LANG_CODE" "public/$LANG_CODE"
+
+      - name: Deploy
+        run: hugo deploy --environment=${{ inputs.environment }} --maxDeletes=0
+
+      # Derived from the segments actually built, so it purges what shipped.
+      - name: Invalidate cache
+        env:
+          API_ENDPOINT: ${{ secrets.CACHE_INVALIDATION_API_ENDPOINT }}
+          SEGMENTS: ${{ inputs.segments }}
+        run: |
+          set -euo pipefail
+          BASE_URL="https://products-qa.groupdocs.cloud"
+          if [ "${{ inputs.environment }}" = "production" ]; then
+            BASE_URL="https://products.groupdocs.cloud"
+          fi
+          node - > "$RUNNER_TEMP/targets.txt" <<'NODE'
+          const fs = require('fs')
+          const cfg = JSON.parse(fs.readFileSync('hugo.json', 'utf8'))
+          const lang = cfg.defaultContentLanguage
+          const prefix = lang === 'en' ? '' : `/${lang}`
+          const langs = new Set(cfg.disableLanguages.concat(lang))
+          const paths = process.env.SEGMENTS.split(',').map(s => s.trim()).filter(Boolean)
+            .map(s => s.replace(/^\/+|\/+$/g, '').split('/').filter(Boolean))
+            .map(p => (langs.has(p[0]) ? p.slice(1) : p).join('/'))
+          const out = paths.map(p => (p ? `${prefix}/${p}/*` : `${prefix}/*`))
+          process.stdout.write([...new Set(out)].join('\n') + '\n')
+          NODE
+          while read -r path; do
+            [ -n "$path" ] || continue
+            echo "invalidating $BASE_URL$path"
+            curl --silent --show-error --fail --output /dev/null \
+                 -d "{\"website\":\"$BASE_URL$path\"}" \
+                 -H "Content-Type: application/json" \
+                 -X POST "$API_ENDPOINT"
+          done < "$RUNNER_TEMP/targets.txt"
