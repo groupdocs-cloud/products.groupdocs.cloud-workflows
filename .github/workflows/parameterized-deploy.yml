@@ -149,7 +149,6 @@ jobs:
           export CONFIGURE_LANGUAGE
           export CONFIGURE_SEGMENTS="$NAMES"
           export CONFIGURE_PATHS_FILE="$RUNNER_TEMP/slice-paths.txt"
-          printf '%s' "$NAMES" > "$RUNNER_TEMP/render-segments.txt"
           npm run configure
 
       # config/_default beats a root config file for any key it declares, and
@@ -216,12 +215,11 @@ jobs:
       - name: Build
         run: |
           set -euo pipefail
-          # ignoreFiles bounds what is loaded; --renderSegments makes Hugo emit
-          # exactly this segment's pages, so a slice does not also rewrite the
-          # site-root files that every other slice would overwrite.
-          RENDER=$(cat "$RUNNER_TEMP/render-segments.txt")
+          # No --renderSegments: configure wrote it into hugo.json beside the
+          # ignoreFiles it was derived from, so what Hugo renders and what it
+          # loads come from one list and cannot disagree.
           /usr/bin/time -v -o "$RUNNER_TEMP/time.txt" \
-            hugo --environment=${{ inputs.environment }} --renderSegments "$RENDER"
+            hugo --environment=${{ inputs.environment }}
           PEAK_KB=$(awk '/Maximum resident set size/ {print $NF}' "$RUNNER_TEMP/time.txt")
           WALL=$(awk -F': ' '/Elapsed \(wall clock\)/ {print $2}' "$RUNNER_TEMP/time.txt")
           PAGES=$(find public -name '*.html' | wc -l)
