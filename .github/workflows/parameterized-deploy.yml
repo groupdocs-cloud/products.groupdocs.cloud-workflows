@@ -14,8 +14,14 @@ run-name: Deploy [${{ inputs.run_tag }}] ${{ inputs.segments }} @ ${{ inputs.ref
 #   segments: fr:viewer                   the viewer segment, French
 #
 # Each segment declares its own language, so a name identifies a slice
-# completely. One run renders one language - Hugo cannot disable its own
-# default content language - so naming segments from two is rejected.
+# completely, and naming segments from two languages is rejected.
+#
+# English is always Hugo's default content language, whichever language is
+# being rendered: making the slice language the default would tell Hugo to read
+# every unsuffixed file as that language and publish the English corpus under
+# its prefix. English is loaded alongside the target so `x.md` resolves against
+# `x.fr.md`, and the segment's own language matcher keeps it unrendered - which
+# is why no step trims the output.
 #
 # Hugo's segments filter *rendering*, not loading, so --renderSegments alone
 # leaves the whole site in memory. The path globs are therefore also translated
@@ -220,19 +226,6 @@ jobs:
             echo "| wall clock | $WALL |"
           } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
 
-      # With the slice language as Hugo's default, a non-English build also
-      # writes root-level files - the `/` alias, robots.txt, sitemap.xml -
-      # which would overwrite English's. Keep only this language's prefix.
-      - name: Keep only this language's sub-site
-        run: |
-          set -euo pipefail
-          LANG_CODE=$(node -e 'process.stdout.write(require("./hugo.json").defaultContentLanguage)')
-          if [ "$LANG_CODE" = "en" ]; then echo "en publishes at the root"; exit 0; fi
-          test -d "public/$LANG_CODE" \
-            || { echo "::error::public/$LANG_CODE was not rendered"; exit 1; }
-          mv "public/$LANG_CODE" "${RUNNER_TEMP}/$LANG_CODE"
-          rm -rf public && mkdir public
-          mv "${RUNNER_TEMP}/$LANG_CODE" "public/$LANG_CODE"
 
       # STUB - uploads nothing. Reports what a real deploy would ship so the
       # rest of the pipeline can be exercised without touching the bucket.
