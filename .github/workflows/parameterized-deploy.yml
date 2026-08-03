@@ -120,91 +120,37 @@ jobs:
       - name: Install GNU time
         run: command -v /usr/bin/time >/dev/null || sudo apt-get install -y -qq time
 
+      # The slicing lives in the content repo's own `npm run configure`, so a
+      # build here and a build on a laptop resolve a segment identically. The
+      # workflow contributes nothing to the definition.
       - name: Resolve segments into a Hugo config
         env:
           SEGMENTS: ${{ inputs.segments }}
         run: |
           set -euo pipefail
-          rm -f config.json
-          node - > hugo.json <<'NODE'
-          const fs = require('fs'), yaml = require('js-yaml')
-          const CONTENT_ROOT = process.env.CONTENT_ROOT || 'content/english'
-          const raw = (process.env.SEGMENTS || 'en').split(',').map(s => s.trim()).filter(Boolean)
-          const fail = m => { console.error(`::error::${m}`); process.exit(1) }
-          if (!raw.length) fail('segments is empty')
-
-          const SEG_FILE = 'config/_default/segments.yaml'
-          if (!fs.existsSync(SEG_FILE)) fail(`no segment definitions at ${SEG_FILE}`)
-          const defs = yaml.load(fs.readFileSync(SEG_FILE, 'utf8')) || {}
-          const languages = Object.keys(yaml.load(
-            fs.readFileSync('config/_default/languages.yaml', 'utf8')))
-
-          // `[<lang>:]<name>` - the language is orthogonal to the slice.
-          const pairs = raw.map(tok => {
-            const i = tok.indexOf(':')
-            if (i < 0) return { lang: 'en', name: tok }
-            const lang = tok.slice(0, i)
-            if (!languages.includes(lang)) fail(`unknown language "${lang}" in "${tok}"`)
-            return { lang, name: tok.slice(i + 1) }
-          })
-          const langs = [...new Set(pairs.map(p => p.lang))]
-          if (langs.length > 1)
-            fail(`segments span several languages (${langs.join(', ')}); one language per run`)
-          const lang = langs[0]
-
-          // `/p/**` is a subtree; a bare `/p` is that one page. Conflating them
-          // would turn `/conversion` from two pages into eighty-four thousand.
-          const subtree = new Set(), exact = new Set()
-          for (const { name } of pairs) {
-            const seg = defs[name]
-            if (!seg) fail(`unknown segment "${name}"; defined: ${Object.keys(defs).join(', ')}`)
-            if (seg.excludes) fail(`segment "${name}" uses excludes, which ignoreFiles cannot express`)
-            if (!Array.isArray(seg.includes) || !seg.includes.length)
-              fail(`segment "${name}" has no includes`)
-            for (const filter of seg.includes) {
-              const extra = Object.keys(filter).filter(k => k !== 'path')
-              if (extra.length)
-                fail(`segment "${name}" filters on ${extra.join(', ')}, which ignoreFiles cannot express`)
-              for (const alt of filter.path.replace(/^\{|\}$/g, '').split(',').map(s => s.trim())) {
-                const m = alt.match(/^\/([^*{}]+?)(\/\*\*)?$/)
-                if (!m) fail(`segment "${name}" path "${alt}" is not a plain prefix; cannot translate`)
-                ;(m[2] ? subtree : exact).add(m[1].replace(/\/+$/, ''))
-              }
+          # `[<lang>:]<name>` - the language is orthogonal to the slice. An
+          # unprefixed name means English, so a list mixing prefixed and bare
+          # names spans two languages and is rejected: one run, one language.
+          eval "$(node -e '
+            const toks = (process.env.SEGMENTS || "").split(",").map(s => s.trim()).filter(Boolean)
+            if (!toks.length) { console.log("echo \"::error::segments is empty\"; exit 1"); process.exit(0) }
+            const parts = toks.map(t => {
+              const m = t.match(/^([a-z]{2}):(.+)$/)
+              return m ? { lang: m[1], name: m[2] } : { lang: "en", name: t }
+            })
+            const langs = [...new Set(parts.map(p => p.lang))]
+            if (langs.length > 1) {
+              console.log(`echo "::error::segments span several languages (${langs.join(", ")}); one language per run"; exit 1`)
+              process.exit(0)
             }
-          }
-          for (const p of [...subtree, ...exact]) {
-            if (!fs.existsSync(`${CONTENT_ROOT}/${p}`)) fail(`segment path does not exist: ${p}`)
-          }
-
-          // Exclude every directory no segment reaches into; stop recursing
-          // where one is wholly kept, so the list is the shortest that fits.
-          const covered = rel => [...subtree].some(s => s === rel || rel.startsWith(s + '/'))
-          const reaches = rel => [...subtree, ...exact].some(s => s === rel || s.startsWith(rel + '/'))
-          const ignoreFiles = []
-          ;(function walk (relDir, absDir) {
-            for (const e of fs.readdirSync(absDir, { withFileTypes: true })) {
-              if (!e.isDirectory()) continue
-              const rel = relDir ? `${relDir}/${e.name}` : e.name
-              if (covered(rel)) continue
-              if (reaches(rel)) walk(rel, `${absDir}/${e.name}`)
-              else ignoreFiles.push(`/${rel}/`)
-            }
-          })('', CONTENT_ROOT)
-
-          // Names for --renderSegments, and paths for cache invalidation.
-          fs.writeFileSync(process.env.RUNNER_TEMP + '/render-segments.txt',
-            pairs.map(p => p.name).join(','))
-          fs.writeFileSync(process.env.RUNNER_TEMP + '/slice-paths.txt',
-            [...new Set([...subtree, ...exact])].join('\n'))
-
-          process.stdout.write(JSON.stringify({
-            defaultContentLanguage: lang,
-            // English owns the site root; every other language owns its prefix.
-            defaultContentLanguageInSubdir: lang !== 'en',
-            disableLanguages: languages.filter(l => l !== lang),
-            ignoreFiles
-          }))
-          NODE
+            console.log(`CONFIGURE_LANGUAGE=${langs[0]}`)
+            console.log(`NAMES=${parts.map(p => p.name).join(",")}`)
+          ')"
+          export CONFIGURE_LANGUAGE
+          export CONFIGURE_SEGMENTS="$NAMES"
+          export CONFIGURE_PATHS_FILE="$RUNNER_TEMP/slice-paths.txt"
+          printf '%s' "$NAMES" > "$RUNNER_TEMP/render-segments.txt"
+          npm run configure
 
       # config/_default beats a root config file for any key it declares, and
       # Hugo does not warn when it wins. Assert the slice actually took effect
