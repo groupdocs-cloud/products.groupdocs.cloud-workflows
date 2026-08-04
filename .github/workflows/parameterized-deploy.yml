@@ -192,26 +192,32 @@ jobs:
 
           const res = want.ignoreFiles.map(r => new RegExp(r))
           const root = process.env.CONTENT_ROOT
-          let total = 0
+          const selected = p => p.endsWith('.md') && !res.some(r => r.test(p))
+          const walk = dir => {
+            let n = 0
+            for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+              const p = `${dir}/${e.name}`
+              n += e.isDirectory() ? walk(p) : selected(p) ? 1 : 0
+            }
+            return n
+          }
+          // content/english/_index.md is the home page - a file at the root
+          // rather than a directory, and no ignoreFiles prefix can exclude it,
+          // so it is counted apart from the directories it would otherwise mask.
+          let inDirs = 0
+          let atRoot = 0
           const per = {}
           for (const d of fs.readdirSync(root, { withFileTypes: true })) {
-            if (!d.isDirectory()) continue
-            let n = 0
-            ;(function walk (dir) {
-              for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-                const p = `${dir}/${e.name}`
-                if (e.isDirectory()) walk(p)
-                else if (p.endsWith('.md') && !res.some(r => r.test(p))) n++
-              }
-            })(`${root}/${d.name}`)
-            if (n) { per[d.name] = n; total += n }
+            if (!d.isDirectory()) { if (selected(`${root}/${d.name}`)) atRoot++; continue }
+            const n = walk(`${root}/${d.name}`)
+            if (n) { per[d.name] = n; inDirs += n }
           }
-          // A segment that names no path selects no content on purpose: it
-          // carries the site-level kinds. One that names paths and still
-          // selects nothing is a broken slice.
+          if (atRoot) per['(site root)'] = atRoot
+          const total = inDirs + atRoot
+
           const paths = fs.readFileSync(`${process.env.RUNNER_TEMP}/slice-paths.txt`, 'utf8')
-            .split('\n').filter(l => l.trim())
-          if (!total && paths.length) {
+            .split('\n').map(l => l.trim()).filter(Boolean)
+          if (paths.some(p => p !== '/') && !inDirs) {
             console.log('::error::this slice declares paths but selects no content')
             process.exit(1)
           }
