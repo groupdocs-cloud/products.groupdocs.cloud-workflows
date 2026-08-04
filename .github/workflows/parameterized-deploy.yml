@@ -169,8 +169,6 @@ jobs:
           hugo config > "$RUNNER_TEMP/effective.txt" 2>/dev/null
           node - <<'NODE'
           const fs = require('fs')
-          // Everything readable goes to the job summary as well as the log; the
-          // ::error:: annotations stay on stdout, where Actions picks them up.
           const summary = process.env.GITHUB_STEP_SUMMARY
           const say = s => { console.log(s); if (summary) fs.appendFileSync(summary, s + '\n') }
           const want = JSON.parse(fs.readFileSync('hugo.json', 'utf8'))
@@ -208,7 +206,15 @@ jobs:
             })(`${root}/${d.name}`)
             if (n) { per[d.name] = n; total += n }
           }
-          if (!total) { console.log('::error::this slice selects no content'); process.exit(1) }
+          // A segment that names no path selects no content on purpose: it
+          // carries the site-level kinds. One that names paths and still
+          // selects nothing is a broken slice.
+          const paths = fs.readFileSync(`${process.env.RUNNER_TEMP}/slice-paths.txt`, 'utf8')
+            .split('\n').filter(l => l.trim())
+          if (!total && paths.length) {
+            console.log('::error::this slice declares paths but selects no content')
+            process.exit(1)
+          }
 
           // ~160 KiB of peak RSS per page over a ~350 MiB floor, measured on
           // this runner class. Cheaper to warn than to be OOM-killed at 90%.
@@ -219,11 +225,15 @@ jobs:
 
           say('## Slice')
           say('')
-          say('| Content directory | Source pages |')
-          say('| :--- | ---: |')
-          for (const [p, n] of Object.entries(per).sort((a, b) => b[1] - a[1]))
-            say(`| \`${p}\` | ${n.toLocaleString()} |`)
-          say(`| **Total** | **${total.toLocaleString()}** |`)
+          if (total) {
+            say('| Content directory | Source pages |')
+            say('| :--- | ---: |')
+            for (const [p, n] of Object.entries(per).sort((a, b) => b[1] - a[1]))
+              say(`| \`${p}\` | ${n.toLocaleString()} |`)
+            say(`| **Total** | **${total.toLocaleString()}** |`)
+          } else {
+            say('No content directories &mdash; site-level artifacts only.')
+          }
           say('')
           say(`Renders \`${want.renderSegments.join('`, `')}\`. `
             + `Excluded at load time: ${want.ignoreFiles.length} content `
@@ -305,11 +315,6 @@ jobs:
           BASE_URL="https://products-qa.groupdocs.cloud"
           if [ "${{ inputs.environment }}" = "production" ]; then
             BASE_URL="https://products.groupdocs.cloud"
-          fi
-          # configure wrote these as URL paths, language prefix included, so
-          # there is nothing to reconstruct here.
-          if [ ! -s "$RUNNER_TEMP/slice-paths.txt" ]; then
-            echo "::error::configure produced no publish paths"; exit 1
           fi
           {
             echo "## Cache invalidation &middot; stub, nothing posted"
