@@ -26,7 +26,7 @@ jobs:
   translate:
     name: ${{ inputs.product }} → ${{ inputs.language }}
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 355
 
     steps:
       - name: Checkout site
