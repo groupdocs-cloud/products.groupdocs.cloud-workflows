@@ -60,6 +60,7 @@ jobs:
       - name: Translate
         run: |
           docker run --rm \
+            --name "$CONTAINER_NAME" \
             --user "$(id -u):$(id -g)" \
             -v "${{ github.workspace }}/site:/app" \
             -e OPENAI_API_KEY \
@@ -76,8 +77,19 @@ jobs:
             --output-dir "translated-content/${{ inputs.product }}" \
             --max-files "${{ inputs.max-files }}" \
             --target-language "${{ inputs.language }}" \
-            > translated.txt 2> run.log
+            > translated.txt 2> run.log &
+          TRANSLATE_PID=$!
+          # Cancellation reaches translagent via docker stop; it commits finished work before exiting.
+          trap 'docker stop -t 55 "$CONTAINER_NAME" || true' INT TERM
+          wait "$TRANSLATE_PID"
+          STATUS=$?
+          if [ "$STATUS" -gt 128 ]; then
+            wait "$TRANSLATE_PID"
+            STATUS=$?
+          fi
+          exit "$STATUS"
         env:
+          CONTAINER_NAME: translagent-${{ github.run_id }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
           TRANSLATION_MODEL: ${{ secrets.TRANSLATION_MODEL || 'professionalize-gpt-oss' }}
