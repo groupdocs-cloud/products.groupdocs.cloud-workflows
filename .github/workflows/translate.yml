@@ -80,7 +80,7 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
-          TRANSLATION_MODEL: professionalize-gpt-oss
+          TRANSLATION_MODEL: ${{ secrets.TRANSLATION_MODEL || 'professionalize-gpt-oss' }}
           OTEL_EXPORTER_OTLP_ENDPOINT: ${{ secrets.OTEL_EXPORTER_OTLP_ENDPOINT }}
           OTEL_EXPORTER_OTLP_HEADERS: ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
           OTEL_SERVICE_NAME: translagent
