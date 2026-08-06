@@ -1,4 +1,5 @@
 name: Translate
+run-name: "Translate ${{ inputs.product }} → ${{ inputs.language }} (max ${{ inputs.max-files }})"
 
 on:
   workflow_dispatch:
@@ -85,6 +86,15 @@ jobs:
           OTEL_SERVICE_NAME: translagent
           GIT_AUTHOR_NAME: ${{ secrets.GIT_AUTHOR_NAME }}
           GIT_AUTHOR_EMAIL: ${{ secrets.GIT_AUTHOR_EMAIL }}
+
+      # A run that neither translated nor skipped anything did no work at
+      # all — a missing content dir, a broken image, or an empty binary.
+      - name: Guard against a silent no-op
+        run: |
+          if ! grep -qE "^(Translated|Up to date, skipped): " translated.txt; then
+            echo "::error::translagent produced no output — neither a translation nor a skip"
+            exit 1
+          fi
 
       # Runs even when the job times out mid-run: batches of 10 are already
       # committed locally and must not be lost.
