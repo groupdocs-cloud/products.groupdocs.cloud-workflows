@@ -67,7 +67,7 @@ jobs:
           GIT_AUTHOR_NAME: ${{ secrets.GIT_AUTHOR_NAME }}
         run: |
           PRODUCT_OFFICIAL="GroupDocs.$(echo "${{ inputs.product }}" | sed 's/./\U&/')"
-          echo "OTEL_RESOURCE_ATTRIBUTES=service.namespace=$GIT_AUTHOR_NAME,deployment.environment.name=${{ inputs.environment }},deployment.environment=${{ inputs.environment }},aspose.agent.product=$PRODUCT_OFFICIAL,aspose.agent.item=Product Pages,aspose.agent.job=Docs Translation,aspose.agent.website=groupdocs.cloud,aspose.agent.website_section=Product Pages" >> "$GITHUB_ENV"
+          echo "OTEL_RESOURCE_ATTRIBUTES=service.namespace=$GIT_AUTHOR_NAME,deployment.environment.name=${{ inputs.environment }},deployment.environment=${{ inputs.environment }},aspose.agent.product=$PRODUCT_OFFICIAL,aspose.agent.item=Product Pages,aspose.agent.job=Translation,aspose.agent.website=groupdocs.cloud,aspose.agent.website_section=Product Pages" >> "$GITHUB_ENV"
 
       - name: Translate
         run: |
