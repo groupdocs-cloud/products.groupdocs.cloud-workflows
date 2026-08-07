@@ -1,0 +1,41 @@
+name: Tally
+run-name: "Tally hourly aggregation"
+
+on:
+  schedule:
+    - cron: "7 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: tally
+  cancel-in-progress: false
+
+jobs:
+  tally:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout tally
+        uses: actions/checkout@v7
+        with:
+          repository: agentization/tally
+          token: ${{ secrets.REPO_TOKEN }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Run tally
+        env:
+          SIGNOZ_WORKSPACE: proven-midge.eu2.signoz.cloud
+          SIGNOZ_API_KEY: ${{ secrets.SIGNOZ_API_KEY }}
+          ASPOSE_METRICS_API_KEY: ${{ secrets.ASPOSE_METRICS_API_KEY }}
+          TALLY_OWNER: ${{ secrets.GIT_AUTHOR_NAME }}
+          TALLY_JOB: Reporting
+        run: ./target/release/tally
