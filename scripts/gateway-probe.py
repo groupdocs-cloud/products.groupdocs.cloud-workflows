@@ -31,11 +31,14 @@ CTX = ssl.create_default_context()
 CA = "/root/.ccr/ca-bundle.crt"
 
 
-def call(tag):
-    prompt = (
-        "Translate to Spanish, reply with the translation only: "
-        f"'The meeting starts at seven and the report is due tomorrow ({tag}-{NONCE}).'"
-    )
+def call(tag, minimal=False):
+    if minimal:
+        prompt = f"Reply with only: ok ({tag}-{NONCE})"
+    else:
+        prompt = (
+            "Translate to Spanish, reply with the translation only: "
+            f"'The meeting starts at seven and the report is due tomorrow ({tag}-{NONCE}).'"
+        )
     body = json.dumps(
         {
             "model": MODEL,
@@ -79,7 +82,67 @@ def show(label, results, wall):
     return busy
 
 
+def ramp():
+    """Climb 1,2,4,...,128 concurrent minimal requests until the gateway chokes."""
+    host = URL.split("//", 1)[-1].split("/", 1)[0]
+    print(f"gateway ramp: host={host} model={MODEL} nonce={NONCE}")
+    w = call("warmup", minimal=True)
+    print(f"warmup: {w['dur']:.1f}s status={w['status']}")
+    if w["status"] != 200:
+        print("warmup failed - aborting")
+        sys.exit(1)
+
+    base_median = None
+    last_rate = 0.0
+    flat = 0
+    highest_clean = 1
+    first_degraded = None
+    print(f"\n{'N':>4} {'ok':>4} {'err':>4} {'wall':>7} {'median':>7} {'max':>7} {'req/s':>6} {'par':>6}")
+    for n in [1, 2, 4, 8, 16, 32, 64, 128]:
+        time.sleep(3)
+        t = time.monotonic()
+        with ThreadPoolExecutor(max_workers=n) as pool:
+            results = list(pool.map(lambda i: call(f"r{n}.{i}", minimal=True), range(n)))
+        wall = time.monotonic() - t
+        durs = sorted(r["dur"] for r in results)
+        ok = sum(1 for r in results if r["status"] == 200)
+        err = n - ok
+        median = durs[len(durs) // 2]
+        busy = sum(durs)
+        rate = ok / wall if wall else 0.0
+        print(
+            f"{n:>4} {ok:>4} {err:>4} {wall:>6.1f}s {median:>6.1f}s {durs[-1]:>6.1f}s {rate:>6.2f} {busy / wall:>6.2f}"
+        )
+        if base_median is None:
+            base_median = median
+        degraded = err > 0 or median > 1.5 * base_median
+        if not degraded:
+            highest_clean = n
+        elif first_degraded is None:
+            first_degraded = n
+        if err > n // 4:
+            print(f"\nstopping: {err} of {n} failed")
+            break
+        if rate < last_rate * 1.15:
+            flat += 1
+            if flat >= 2:
+                print(f"\nstopping: throughput flat since N={n // 4}")
+                break
+        else:
+            flat = 0
+        last_rate = max(last_rate, rate)
+
+    print(f"\nhighest clean level: {highest_clean} (no errors, median within 1.5x of unloaded)")
+    if first_degraded:
+        print(f"first degraded level: {first_degraded}")
+    else:
+        print("no degradation observed up to the last level tried")
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "ramp":
+        ramp()
+        return
     host = URL.split("//", 1)[-1].split("/", 1)[0]
     print(f"gateway probe: host={host} model={MODEL} nonce={NONCE}")
 

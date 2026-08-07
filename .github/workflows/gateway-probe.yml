@@ -2,6 +2,13 @@ name: Gateway probe
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "probe (3 seq + 6 conc) or ramp (climb to the choke point)"
+        required: false
+        default: "probe"
+        type: choice
+        options: [probe, ramp]
 
 permissions:
   contents: read
@@ -20,4 +27,4 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
           TRANSLATION_MODEL: ${{ secrets.TRANSLATION_MODEL || 'professionalize-gpt-oss' }}
-        run: python3 scripts/gateway-probe.py
+        run: python3 scripts/gateway-probe.py "${{ inputs.mode || 'probe' }}"
