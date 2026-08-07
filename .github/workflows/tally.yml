@@ -38,5 +38,4 @@ jobs:
           ASPOSE_METRICS_API_KEY: ${{ secrets.ASPOSE_METRICS_API_KEY }}
           TALLY_OWNER: ${{ secrets.GIT_AUTHOR_NAME }}
           TALLY_JOB: Reporting
-          TALLY_WINDOW_HOURS: "8"
         run: ./target/release/tally
