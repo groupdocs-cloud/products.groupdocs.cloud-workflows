@@ -17,6 +17,11 @@ on:
         required: false
         default: "20000"
         type: string
+      environment:
+        description: "Reporting environment (test rows are auto-purged nightly)"
+        required: false
+        default: "production"
+        type: string
 
 concurrency:
   group: translate-${{ inputs.product }}-${{ inputs.language }}
@@ -57,6 +62,13 @@ jobs:
           git config user.name "$GIT_AUTHOR_NAME"
           git config user.email "$GIT_AUTHOR_EMAIL"
 
+      - name: Compute reporting attributes
+        env:
+          GIT_AUTHOR_NAME: ${{ secrets.GIT_AUTHOR_NAME }}
+        run: |
+          PRODUCT_OFFICIAL="GroupDocs.$(echo "${{ inputs.product }}" | sed 's/./\U&/')"
+          echo "OTEL_RESOURCE_ATTRIBUTES=service.namespace=$GIT_AUTHOR_NAME,deployment.environment.name=${{ inputs.environment }},aspose.agent.product=$PRODUCT_OFFICIAL,aspose.agent.item=Product Pages,aspose.agent.job=Docs Translation,aspose.agent.website=groupdocs.cloud,aspose.agent.website_section=Product Pages" >> "$GITHUB_ENV"
+
       - name: Translate
         run: |
           docker run --rm \
@@ -69,6 +81,7 @@ jobs:
             -e OTEL_EXPORTER_OTLP_ENDPOINT \
             -e OTEL_EXPORTER_OTLP_HEADERS \
             -e OTEL_SERVICE_NAME \
+            -e OTEL_RESOURCE_ATTRIBUTES \
             -e GIT_AUTHOR_NAME \
             -e GIT_AUTHOR_EMAIL \
             ghcr.io/agentization/translagent:latest \
