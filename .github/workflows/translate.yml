@@ -14,7 +14,7 @@ on:
       languages:
         description: "Comma-separated target language codes"
         required: false
-        default: "de,el,es,fr,id,it,ja,ko,pt,ru,tr,zh,ar,th,fa,he,da,vi"
+        default: "ru,es,pt,id,fr,it,fa,ja,de,zh,he,ar,vi,th,el,ko,tr,da"
         type: string
       max-files:
         description: "Files one product may process (skips count toward it)"
@@ -181,7 +181,7 @@ jobs:
         env:
           BUDGET_MINUTES: ${{ inputs.budget-minutes || '42' }}
           PRODUCTS_INPUT: ${{ inputs.products || '' }}
-          LANGUAGES: ${{ inputs.languages || 'de,el,es,fr,id,it,ja,ko,pt,ru,tr,zh,ar,th,fa,he,da,vi' }}
+          LANGUAGES: ${{ inputs.languages || 'ru,es,pt,id,fr,it,fa,ja,de,zh,he,ar,vi,th,el,ko,tr,da' }}
           MAX_FILES: ${{ inputs.max-files || '100000' }}
           ENVIRONMENT: ${{ inputs.environment || 'production' }}
           TRANSLAGENT_MAX_CONCURRENCY: "128"
