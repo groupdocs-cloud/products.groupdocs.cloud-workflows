@@ -170,7 +170,7 @@ jobs:
           LANGUAGES: ${{ inputs.languages || 'de,el,es,fr,id,it,ja,ko,pt,ru,tr,zh,ar,th,fa,he,da,vi' }}
           MAX_FILES: ${{ inputs.max-files || '100000' }}
           ENVIRONMENT: ${{ inputs.environment || 'production' }}
-          TRANSLAGENT_MAX_CONCURRENCY: "64"
+          TRANSLAGENT_MAX_CONCURRENCY: "128"
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
           TRANSLATION_MODEL: ${{ secrets.TRANSLATION_MODEL || 'professionalize-gpt-oss' }}
