@@ -82,6 +82,7 @@ jobs:
             -e OTEL_EXPORTER_OTLP_HEADERS \
             -e OTEL_SERVICE_NAME \
             -e OTEL_RESOURCE_ATTRIBUTES \
+            -e TRANSLAGENT_MAX_CONCURRENCY \
             -e GIT_AUTHOR_NAME \
             -e GIT_AUTHOR_EMAIL \
             ghcr.io/agentization/translagent:latest \
@@ -89,6 +90,7 @@ jobs:
             --content-dir "content/english/${{ inputs.product }}" \
             --output-dir "translated-content/${{ inputs.product }}" \
             --max-files "${{ inputs.max-files }}" \
+            --requests-per-minute "1200" \
             --target-language "${{ inputs.language }}" \
             > translated.txt 2> run.log &
           TRANSLATE_PID=$!
@@ -103,6 +105,7 @@ jobs:
           exit "$STATUS"
         env:
           CONTAINER_NAME: translagent-${{ github.run_id }}
+          TRANSLAGENT_MAX_CONCURRENCY: "64"
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
           TRANSLATION_MODEL: ${{ secrets.TRANSLATION_MODEL || 'professionalize-gpt-oss' }}
