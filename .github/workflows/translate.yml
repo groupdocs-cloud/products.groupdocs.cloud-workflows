@@ -73,10 +73,10 @@ jobs:
           git config user.name "$GIT_AUTHOR_NAME"
           git config user.email "$GIT_AUTHOR_EMAIL"
 
-      # Smallest product first: each one finishes within a few runs and
-      # thereafter costs only its skip scan, so the budget flows to the next
-      # and the largest inherits whatever is left. Alphabetical order would
-      # park every run inside the one product that holds 97% of the pages.
+      # Largest product first: a language pass can only keep as many files in
+      # flight as it has, so a product of ten pages caps the level at ten
+      # however much the endpoint would carry. The depth this deployment runs
+      # at is only reachable inside the products that hold the pages.
       - name: Translate
         run: |
           set -u
@@ -90,7 +90,7 @@ jobs:
             PRODUCTS=$(for dir in site/content/english/*/; do
                 [ -d "$dir" ] || continue
                 printf '%s %s\n' "$(find "$dir" -name '*.md' | wc -l)" "$(basename "$dir")"
-              done | sort -n | awk '{print $2}')
+              done | sort -rn | awk '{print $2}')
           fi
           echo "order: $(echo $PRODUCTS | tr '\n' ' ')"
 
@@ -154,9 +154,13 @@ jobs:
             echo "::endgroup::"
           done
 
+          if [ "$REACHED" -eq 0 ]; then
+            echo "::error::no product was run: none of [$PRODUCTS] exists"
+            exit 1
+          fi
           # One product failing is that product's content; every product this
           # run reached failing is the endpoint, the image or the credentials.
-          if [ "$REACHED" -gt 0 ] && [ "$FAILED" -eq "$REACHED" ]; then
+          if [ "$FAILED" -eq "$REACHED" ]; then
             echo "::error::every product this run reached failed"
             exit 1
           fi
@@ -176,12 +180,14 @@ jobs:
           GIT_AUTHOR_NAME: ${{ secrets.GIT_AUTHOR_NAME }}
           GIT_AUTHOR_EMAIL: ${{ secrets.GIT_AUTHOR_EMAIL }}
 
-      # A run that neither translated nor skipped anything did no work at
-      # all — a missing content dir, a broken image, or an empty binary.
+      # A budgeted run can legitimately spend everything on one page that does
+      # not finish, so completed pages are the wrong evidence of a healthy run.
+      # A pass that started is what separates slow from broken — a missing
+      # content dir, a broken image or an empty binary never gets that far.
       - name: Guard against a silent no-op
         run: |
-          if ! grep -qE "^(Translated|Up to date, skipped): " translated.txt; then
-            echo "::error::translagent produced no output — neither a translation nor a skip"
+          if ! grep -q "translation pass starting" run.log; then
+            echo "::error::translagent never started a translation pass"
             exit 1
           fi
 
