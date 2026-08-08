@@ -1,21 +1,30 @@
 name: Translate
-run-name: "Translate ${{ inputs.product }} → ${{ inputs.language }} (max ${{ inputs.max-files }})"
+run-name: "Translate ${{ inputs.products || 'every product' }} → ${{ inputs.languages || 'every language' }}"
 
 on:
+  schedule:
+    - cron: "25 * * * *"
   workflow_dispatch:
     inputs:
-      product:
-        description: "Subfolder of content/english to translate (e.g. conversion)"
-        required: true
+      products:
+        description: "Comma-separated products, or empty for every product, smallest first"
+        required: false
+        default: ""
         type: string
-      language:
-        description: "Target language code (e.g. es)"
-        required: true
+      languages:
+        description: "Comma-separated target language codes"
+        required: false
+        default: "de,el,es,fr,id,it,ja,ko,pt,ru,tr,zh,ar,th,fa,he,da,vi"
         type: string
       max-files:
-        description: "Files this run may process (skips count toward it)"
+        description: "Files one product may process (skips count toward it)"
         required: false
-        default: "20000"
+        default: "100000"
+        type: string
+      budget-minutes:
+        description: "Minutes of translating before the run stops itself and pushes"
+        required: false
+        default: "42"
         type: string
       environment:
         description: "Reporting environment (test rows are auto-purged nightly)"
@@ -23,15 +32,17 @@ on:
         default: "production"
         type: string
 
+# One run at a time: an hourly schedule against a run that may spend its whole
+# budget would otherwise overlap itself.
 concurrency:
-  group: translate-${{ inputs.product }}-${{ inputs.language }}
+  group: translate
   cancel-in-progress: false
 
 jobs:
   translate:
-    name: ${{ inputs.product }} → ${{ inputs.language }}
+    name: Translate
     runs-on: ubuntu-latest
-    timeout-minutes: 355
+    timeout-minutes: 50
 
     steps:
       - name: Checkout site
@@ -62,49 +73,99 @@ jobs:
           git config user.name "$GIT_AUTHOR_NAME"
           git config user.email "$GIT_AUTHOR_EMAIL"
 
-      - name: Compute reporting attributes
-        env:
-          GIT_AUTHOR_NAME: ${{ secrets.GIT_AUTHOR_NAME }}
-        run: |
-          PRODUCT_OFFICIAL="GroupDocs.$(echo "${{ inputs.product }}" | sed 's/./\U&/')"
-          echo "OTEL_RESOURCE_ATTRIBUTES=service.namespace=$GIT_AUTHOR_NAME,deployment.environment.name=${{ inputs.environment }},deployment.environment=${{ inputs.environment }},aspose.agent.report=true,aspose.agent.product=$PRODUCT_OFFICIAL,aspose.agent.item=Product Pages,aspose.agent.job=Translation,aspose.agent.website=groupdocs.cloud,aspose.agent.website_section=Product Pages" >> "$GITHUB_ENV"
-
+      # Smallest product first: each one finishes within a few runs and
+      # thereafter costs only its skip scan, so the budget flows to the next
+      # and the largest inherits whatever is left. Alphabetical order would
+      # park every run inside the one product that holds 97% of the pages.
       - name: Translate
         run: |
-          docker run --rm \
-            --name "$CONTAINER_NAME" \
-            --user "$(id -u):$(id -g)" \
-            -v "${{ github.workspace }}/site:/app" \
-            -e OPENAI_API_KEY \
-            -e OPENAI_BASE_URL \
-            -e TRANSLATION_MODEL \
-            -e OTEL_EXPORTER_OTLP_ENDPOINT \
-            -e OTEL_EXPORTER_OTLP_HEADERS \
-            -e OTEL_SERVICE_NAME \
-            -e OTEL_RESOURCE_ATTRIBUTES \
-            -e TRANSLAGENT_MAX_CONCURRENCY \
-            -e GIT_AUTHOR_NAME \
-            -e GIT_AUTHOR_EMAIL \
-            ghcr.io/agentization/translagent:latest \
-            --project-dir /app \
-            --content-dir "content/english/${{ inputs.product }}" \
-            --output-dir "translated-content/${{ inputs.product }}" \
-            --max-files "${{ inputs.max-files }}" \
-            --requests-per-minute "1200" \
-            --target-language "${{ inputs.language }}" \
-            > translated.txt 2> run.log &
-          TRANSLATE_PID=$!
-          # Cancellation reaches translagent via docker stop; it commits finished work before exiting.
-          trap 'docker stop -t 55 "$CONTAINER_NAME" || true' INT TERM
-          wait "$TRANSLATE_PID"
-          STATUS=$?
-          if [ "$STATUS" -gt 128 ]; then
+          set -u
+          DEADLINE=$(( $(date +%s) + BUDGET_MINUTES * 60 ))
+          REACHED=0
+          FAILED=0
+
+          if [ -n "$PRODUCTS_INPUT" ]; then
+            PRODUCTS=$(echo "$PRODUCTS_INPUT" | tr ',' ' ')
+          else
+            PRODUCTS=$(for dir in site/content/english/*/; do
+                [ -d "$dir" ] || continue
+                printf '%s %s\n' "$(find "$dir" -name '*.md' | wc -l)" "$(basename "$dir")"
+              done | sort -n | awk '{print $2}')
+          fi
+          echo "order: $(echo $PRODUCTS | tr '\n' ' ')"
+
+          for product in $PRODUCTS; do
+            remaining=$(( DEADLINE - $(date +%s) ))
+            if [ "$remaining" -le 60 ]; then
+              echo "budget spent before $product"
+              break
+            fi
+            if [ ! -d "site/content/english/$product" ]; then
+              echo "::warning::no such product: $product"
+              continue
+            fi
+
+            CONTAINER_NAME="translagent-${GITHUB_RUN_ID}-${product}"
+            PRODUCT_OFFICIAL="GroupDocs.$(echo "$product" | sed 's/./\U&/')"
+            export OTEL_RESOURCE_ATTRIBUTES="service.namespace=$GIT_AUTHOR_NAME,deployment.environment.name=$ENVIRONMENT,deployment.environment=$ENVIRONMENT,aspose.agent.report=true,aspose.agent.product=$PRODUCT_OFFICIAL,aspose.agent.item=Product Pages,aspose.agent.job=Translation,aspose.agent.website=groupdocs.cloud,aspose.agent.website_section=Product Pages"
+
+            echo "::group::$product (${remaining}s of budget left)"
+            docker run --rm \
+              --name "$CONTAINER_NAME" \
+              --user "$(id -u):$(id -g)" \
+              -v "${{ github.workspace }}/site:/app" \
+              -e OPENAI_API_KEY \
+              -e OPENAI_BASE_URL \
+              -e TRANSLATION_MODEL \
+              -e OTEL_EXPORTER_OTLP_ENDPOINT \
+              -e OTEL_EXPORTER_OTLP_HEADERS \
+              -e OTEL_SERVICE_NAME \
+              -e OTEL_RESOURCE_ATTRIBUTES \
+              -e TRANSLAGENT_MAX_CONCURRENCY \
+              -e GIT_AUTHOR_NAME \
+              -e GIT_AUTHOR_EMAIL \
+              ghcr.io/agentization/translagent:latest \
+              --project-dir /app \
+              --content-dir "content/english/$product" \
+              --output-dir "translated-content/$product" \
+              --max-files "$MAX_FILES" \
+              --requests-per-minute "1200" \
+              --target-language "$LANGUAGES" \
+              >> translated.txt 2>> run.log &
+            TRANSLATE_PID=$!
+            # Cancellation and the budget both reach translagent via docker
+            # stop; it commits finished work before exiting.
+            trap 'docker stop -t 55 "$CONTAINER_NAME" >/dev/null 2>&1 || true' INT TERM
+            while kill -0 "$TRANSLATE_PID" 2>/dev/null; do
+              if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+                echo "budget spent: stopping $product"
+                docker stop -t 55 "$CONTAINER_NAME" >/dev/null 2>&1 || true
+                break
+              fi
+              sleep 5
+            done
             wait "$TRANSLATE_PID"
             STATUS=$?
+            REACHED=$(( REACHED + 1 ))
+            if [ "$STATUS" -ne 0 ] && [ "$STATUS" -le 128 ]; then
+              echo "::warning::$product exited $STATUS"
+              FAILED=$(( FAILED + 1 ))
+            fi
+            echo "::endgroup::"
+          done
+
+          # One product failing is that product's content; every product this
+          # run reached failing is the endpoint, the image or the credentials.
+          if [ "$REACHED" -gt 0 ] && [ "$FAILED" -eq "$REACHED" ]; then
+            echo "::error::every product this run reached failed"
+            exit 1
           fi
-          exit "$STATUS"
         env:
-          CONTAINER_NAME: translagent-${{ github.run_id }}
+          BUDGET_MINUTES: ${{ inputs.budget-minutes || '42' }}
+          PRODUCTS_INPUT: ${{ inputs.products || '' }}
+          LANGUAGES: ${{ inputs.languages || 'de,el,es,fr,id,it,ja,ko,pt,ru,tr,zh,ar,th,fa,he,da,vi' }}
+          MAX_FILES: ${{ inputs.max-files || '100000' }}
+          ENVIRONMENT: ${{ inputs.environment || 'production' }}
           TRANSLAGENT_MAX_CONCURRENCY: "64"
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
@@ -139,18 +200,20 @@ jobs:
       - name: Summary
         if: always()
         run: |
-          echo "## ${{ inputs.product }} → ${{ inputs.language }}" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          tail -n 20 translated.txt >> "$GITHUB_STEP_SUMMARY" || true
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          grep -cE "^Translated: " translated.txt \
-            | xargs -I{} echo "Files translated this run: {}" >> "$GITHUB_STEP_SUMMARY" || true
+          {
+            echo "## This run"
+            echo "- translated: $(grep -cE '^Translated: ' translated.txt || echo 0)"
+            echo "- already current: $(grep -cE '^Up to date, skipped: ' translated.txt || echo 0)"
+            echo '```'
+            tail -n 20 translated.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" || true
 
       - name: Upload run log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: run-log-${{ inputs.product }}-${{ inputs.language }}-${{ github.run_id }}
+          name: run-log-${{ github.run_id }}
           path: |
             run.log
             translated.txt
