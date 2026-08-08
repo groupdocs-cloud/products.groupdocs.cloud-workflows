@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       products:
-        description: "Comma-separated products, or empty for every product, smallest first"
+        description: "Comma-separated products, or empty for every product, each a slice"
         required: false
         default: ""
         type: string
@@ -73,10 +73,12 @@ jobs:
           git config user.name "$GIT_AUTHOR_NAME"
           git config user.email "$GIT_AUTHOR_EMAIL"
 
-      # Largest product first: a language pass can only keep as many files in
-      # flight as it has, so a product of ten pages caps the level at ten
-      # however much the endpoint would carry. The depth this deployment runs
-      # at is only reachable inside the products that hold the pages.
+      # Every product gets a slice of every run, because discovery is breadth
+      # first only inside the product it was pointed at: one product holding
+      # the budget translates its deep pages while another still has no
+      # landing page at all. A product that finishes inside its slice hands
+      # the rest back, so the slices grow as products complete and the largest
+      # inherits the run.
       - name: Translate
         run: |
           set -u
@@ -85,21 +87,33 @@ jobs:
           FAILED=0
 
           if [ -n "$PRODUCTS_INPUT" ]; then
-            PRODUCTS=$(echo "$PRODUCTS_INPUT" | tr ',' ' ')
+            PRODUCTS=$(echo "$PRODUCTS_INPUT" | tr ',' '\n' | sed '/^$/d')
           else
             PRODUCTS=$(for dir in site/content/english/*/; do
                 [ -d "$dir" ] || continue
                 printf '%s %s\n' "$(find "$dir" -name '*.md' | wc -l)" "$(basename "$dir")"
-              done | sort -rn | awk '{print $2}')
+              done | sort -n | awk '{print $2}')
           fi
+          TOTAL=$(echo "$PRODUCTS" | wc -l)
+          # Whoever the budget runs out on this run starts the next one.
+          PRODUCTS=$(echo "$PRODUCTS" | awk -v run="$GITHUB_RUN_NUMBER" \
+            '{p[NR]=$0} END {for (i = 0; i < NR; i++) print p[(i + run) % NR + 1]}')
           echo "order: $(echo $PRODUCTS | tr '\n' ' ')"
 
+          INDEX=0
           for product in $PRODUCTS; do
+            INDEX=$(( INDEX + 1 ))
             remaining=$(( DEADLINE - $(date +%s) ))
             if [ "$remaining" -le 60 ]; then
               echo "budget spent before $product"
               break
             fi
+            # An equal share of what is left, recomputed each time, so the
+            # products that finish early enlarge the shares of those after.
+            SLICE=$(( remaining / (TOTAL - INDEX + 1) ))
+            [ "$SLICE" -lt 60 ] && SLICE=60
+            STOP=$(( $(date +%s) + SLICE ))
+            [ "$STOP" -gt "$DEADLINE" ] && STOP=$DEADLINE
             if [ ! -d "site/content/english/$product" ]; then
               echo "::warning::no such product: $product"
               continue
@@ -109,7 +123,7 @@ jobs:
             PRODUCT_OFFICIAL="GroupDocs.$(echo "$product" | sed 's/./\U&/')"
             export OTEL_RESOURCE_ATTRIBUTES="service.namespace=$GIT_AUTHOR_NAME,deployment.environment.name=$ENVIRONMENT,deployment.environment=$ENVIRONMENT,aspose.agent.report=true,aspose.agent.product=$PRODUCT_OFFICIAL,aspose.agent.item=Product Pages,aspose.agent.job=Translation,aspose.agent.website=groupdocs.cloud,aspose.agent.website_section=Product Pages"
 
-            echo "::group::$product (${remaining}s of budget left)"
+            echo "::group::$product (${SLICE}s slice of ${remaining}s left)"
             docker run --rm \
               --name "$CONTAINER_NAME" \
               --user "$(id -u):$(id -g)" \
@@ -137,8 +151,8 @@ jobs:
             # stop; it commits finished work before exiting.
             trap 'docker stop -t 55 "$CONTAINER_NAME" >/dev/null 2>&1 || true' INT TERM
             while kill -0 "$TRANSLATE_PID" 2>/dev/null; do
-              if [ "$(date +%s)" -ge "$DEADLINE" ]; then
-                echo "budget spent: stopping $product"
+              if [ "$(date +%s)" -ge "$STOP" ]; then
+                echo "slice spent: stopping $product"
                 docker stop -t 55 "$CONTAINER_NAME" >/dev/null 2>&1 || true
                 break
               fi
