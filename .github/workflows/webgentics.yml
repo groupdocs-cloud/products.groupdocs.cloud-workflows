@@ -1,7 +1,11 @@
-name: Parameterized Deploy
-run-name: Deploy [${{ inputs.run_tag }}] ${{ inputs.segments }} @ ${{ inputs.ref }} (${{ inputs.environment }})
+name: Webgentics
+run-name: "Webgentics-Operation: ${{ inputs.operation_id }}"
 
-# Deploy one slice of the site, named by segment.
+# The workflow webgentics dispatches: one run per operation, its id echoed
+# into the run name above. Any operation_kind but connector.deploy fails the
+# run; a connector.deploy deploys the content repository at sha_ref to the
+# live site. website_id is declared for the dispatch contract and read by
+# nothing here.
 #
 # Segments are defined in the content repository, in Hugo's own
 # config/_default/segments.yaml. That file is the single definition: this
@@ -12,9 +16,10 @@ run-name: Deploy [${{ inputs.run_tag }}] ${{ inputs.segments }} @ ${{ inputs.ref
 #   segments: conversion-net              one segment
 #   segments: conversion-net,viewer       two segments in one run
 #   segments: fr:viewer                   the viewer segment, French
+#   segments:                             every segment - the whole site
 #
 # Each segment declares its own language, so a name identifies a slice
-# completely, and naming segments from two languages is rejected.
+# completely.
 #
 # English is always Hugo's default content language, whichever language is
 # being rendered: making the slice language the default would tell Hugo to read
@@ -35,52 +40,40 @@ run-name: Deploy [${{ inputs.run_tag }}] ${{ inputs.segments }} @ ${{ inputs.ref
 on:
   workflow_dispatch:
     inputs:
-      run_tag:
-        description: Caller's correlation tag, echoed into the run name
+      operation_id:
+        description: Webgentics Operation ID
         type: string
         required: true
-      environment:
-        description: Build environment
-        type: environment
-        default: staging
+      operation_kind:
+        description: Webgentics Operation Kind
+        type: choice
+        options:
+          - connector.deploy
         required: true
-      ref:
-        description: Branch, tag or commit SHA of the content repository
+      sha_ref:
+        description: Branch, tag or commit SHA of the Hugo project repository
         type: string
-        default: master
+        required: true
+      website_id:
+        description: Webgentics Website ID
+        type: string
         required: true
       segments:
-        description: >-
-          Comma-separated segment names from the content repo's
-          config/_default/segments.yaml. A bare name is English.
-          e.g. `conversion-net` or `fr:viewer`
+        description: Comma-separated segment names from the Hugo project repository
         type: string
-        required: true
-      dry_run:
-        description: Build and report what would ship, without uploading
-        type: boolean
-        default: false
-
-  workflow_call:
-    inputs:
-      run_tag: { type: string, required: true }
-      environment: { type: string, required: true }
-      ref: { type: string, required: true }
-      segments: { type: string, required: true }
-      dry_run: { type: boolean, required: false, default: false }
+        required: false
 
 jobs:
   build:
     # The runner belongs to the site, not to the request, so it comes from an
     # Actions variable rather than an input - a caller never names it. Set
     # RUNS_ON at repository or environment level to move builds onto a bigger
-    # or self-hosted runner; environment scope lets staging and production
-    # differ. Unset, it stays on ubuntu-latest.
+    # or self-hosted runner. Unset, it stays on ubuntu-latest.
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
-    environment: ${{ inputs.environment }}
+    environment: production
     env:
-      NODE_ENV: ${{ inputs.environment }}
-      HUGO_ENVIRONMENT: ${{ inputs.environment }}
+      NODE_ENV: production
+      HUGO_ENVIRONMENT: production
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_ENDPOINT_URL: ${{ secrets.AWS_ENDPOINT_URL }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -89,14 +82,24 @@ jobs:
       CONTENT_ROOT: content/english
 
     steps:
-      # `ref` takes a branch, a tag or a SHA in one field - actions/checkout
+      # An unhandled kind must be a red run, never a silent green.
+      - name: Refuse any operation kind but connector.deploy
+        if: inputs.operation_kind != 'connector.deploy'
+        env:
+          KIND: ${{ inputs.operation_kind }}
+        run: |
+          set -euo pipefail
+          echo "::error::unhandled operation kind \"$KIND\": this workflow handles connector.deploy only"
+          exit 1
+
+      # `sha_ref` takes a branch, a tag or a SHA in one field - actions/checkout
       # resolves all three. fetch-depth 0 is what makes a bare SHA work at all
       # (a shallow fetch only carries branch tips), and separately it is what
       # gives each page its own sitemap lastmod instead of one shared date.
       - uses: actions/checkout@v4
         with:
           repository: groupdocs-cloud/products.groupdocs.cloud
-          ref: ${{ inputs.ref }}
+          ref: ${{ inputs.sha_ref }}
           token: ${{ secrets.REPO_TOKEN }}
           fetch-depth: 0
 
@@ -104,14 +107,13 @@ jobs:
         run: |
           set -euo pipefail
           {
-            echo "# ${{ inputs.dry_run && 'Dry run' || 'Deploy' }} &middot; \`${{ inputs.segments }}\` &rarr; ${{ inputs.environment }}"
+            echo "# Deploy &middot; \`${{ inputs.segments || 'every segment' }}\` &rarr; production"
             echo
             echo "| Request | |"
             echo "| :--- | :--- |"
-            echo "| Run tag | \`${{ inputs.run_tag }}\` |"
-            echo "| Segments | \`${{ inputs.segments }}\` |"
-            echo "| Environment | \`${{ inputs.environment }}\` |"
-            echo "| Ref requested | \`${{ inputs.ref }}\` |"
+            echo "| Operation | \`${{ inputs.operation_id }}\` |"
+            echo "| Segments | \`${{ inputs.segments || '(every segment)' }}\` |"
+            echo "| Ref requested | \`${{ inputs.sha_ref }}\` |"
             echo "| Commit | [\`$(git rev-parse --short HEAD)\`](${{ github.server_url }}/groupdocs-cloud/products.groupdocs.cloud/commit/$(git rev-parse HEAD)) $(git log -1 --format=%s | cut -c1-64) |"
             echo "| Authored | $(git log -1 --format=%ad --date=format:'%Y-%m-%d %H:%M') |"
             echo
@@ -122,6 +124,56 @@ jobs:
           node-version: 22
 
       - run: npm install --no-audit --no-fund
+
+      # Empty segments means the whole site: every segment defined at the
+      # checked-out commit, resolved here into the same comma-separated shape
+      # a dispatch would carry.
+      - name: Resolve the segment list
+        id: segments
+        env:
+          REQUESTED: ${{ inputs.segments }}
+        run: |
+          set -euo pipefail
+          if [ -n "$REQUESTED" ]; then
+            {
+              echo 'segments<<SEGMENTS'
+              echo "$REQUESTED"
+              echo 'SEGMENTS'
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          node - <<'NODE'
+          const fs = require('fs')
+          const yaml = require('js-yaml')
+          const file = 'config/_default/segments.yaml'
+          if (!fs.existsSync(file)) {
+            console.log(`::error::${file} is missing at the requested ref`)
+            process.exit(1)
+          }
+          let defined
+          try {
+            defined = yaml.load(fs.readFileSync(file, 'utf8'))
+          } catch (e) {
+            console.log(`::error::${file} does not parse: ${e.message}`)
+            process.exit(1)
+          }
+          const names = defined && typeof defined === 'object' && !Array.isArray(defined)
+            ? Object.keys(defined) : []
+          if (!names.length) {
+            console.log(`::error::${file} defines no segments`)
+            process.exit(1)
+          }
+          const broken = names.filter(n => n.includes(',') || n.includes('\n'))
+          if (broken.length) {
+            console.log(`::error::segment names cannot join a comma-separated list: ${broken.join(' ')}`)
+            process.exit(1)
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `segments=${names.join(',')}\n`)
+          const note = `Resolved every segment: ${names.length} defined at this commit.`
+          console.log(note)
+          const summary = process.env.GITHUB_STEP_SUMMARY
+          if (summary) fs.appendFileSync(summary, note + '\n\n')
+          NODE
 
       # `hugo deploy` ships only in the withdeploy builds; the common setup
       # actions install plain extended, and the deploy then fails after the
@@ -147,7 +199,7 @@ jobs:
       # workflow contributes nothing to the definition.
       - name: Resolve segments into a Hugo config
         env:
-          SEGMENTS: ${{ inputs.segments }}
+          SEGMENTS: ${{ steps.segments.outputs.segments }}
         run: |
           set -euo pipefail
           if [ -z "${SEGMENTS// }" ]; then
@@ -266,7 +318,7 @@ jobs:
           # ignoreFiles it was derived from, so what Hugo renders and what it
           # loads come from one list and cannot disagree.
           /usr/bin/time -v -o "$RUNNER_TEMP/time.txt" \
-            hugo --environment=${{ inputs.environment }}
+            hugo --environment=production
           PEAK_KB=$(awk '/Maximum resident set size/ {print $NF}' "$RUNNER_TEMP/time.txt")
           WALL=$(awk -F': ' '/Elapsed \(wall clock\)/ {print $2}' "$RUNNER_TEMP/time.txt")
           PAGES=$(find public -name '*.html' | wc -l)
@@ -291,12 +343,12 @@ jobs:
           set -euo pipefail
           TARGET=$(node -e '
             const fs=require("fs"), yaml=require("js-yaml");
-            const f=`config/${process.argv[1]}/deployment.yaml`;
+            const f="config/production/deployment.yaml";
             try { process.stdout.write(yaml.load(fs.readFileSync(f,"utf8")).targets[0].url) }
             catch (e) { process.stdout.write("(no target configured)") }
-          ' "${{ inputs.environment }}")
+          ')
           {
-            echo "## Upload${{ inputs.dry_run && ' &middot; dry run, nothing written' || '' }}"
+            echo "## Upload"
             echo
             echo "| Target | Files | Size | Deletions allowed |"
             echo "| :--- | ---: | ---: | ---: |"
@@ -304,9 +356,8 @@ jobs:
             echo
           } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
           hugo deploy \
-            --environment=${{ inputs.environment }} \
-            --maxDeletes 0 \
-            ${{ inputs.dry_run && '--dryRun' || '' }}
+            --environment=production \
+            --maxDeletes 0
 
       # Purges what shipped, from the same path list the slice was built from.
       # configure.js writes those paths language-prefixed, so a `fr:viewer`
@@ -326,15 +377,11 @@ jobs:
       - name: Invalidate cache
         env:
           API_ENDPOINT: ${{ secrets.CACHE_INVALIDATION_API_ENDPOINT }}
-          DRY_RUN: ${{ inputs.dry_run }}
-          BASE_URL: >-
-            ${{ inputs.environment == 'production'
-                && 'https://products.groupdocs.cloud'
-                || 'https://products-qa.groupdocs.cloud' }}
+          BASE_URL: https://products.groupdocs.cloud
         run: |
           set -euo pipefail
-          if [ "$DRY_RUN" != "true" ] && [ -z "${API_ENDPOINT:-}" ]; then
-            echo "::error::CACHE_INVALIDATION_API_ENDPOINT is not set for ${{ inputs.environment }}"
+          if [ -z "${API_ENDPOINT:-}" ]; then
+            echo "::error::CACHE_INVALIDATION_API_ENDPOINT is not set"
             exit 1
           fi
 
@@ -346,10 +393,6 @@ jobs:
             [ -n "$path" ] || continue
             total=$((total + 1))
             url="$BASE_URL$path"
-            if [ "$DRY_RUN" = "true" ]; then
-              printf '| `%s` | would purge |\n' "$url" >> "$TABLE"
-              continue
-            fi
             code=$(curl --silent --show-error --output /dev/null \
                         --retry 3 --retry-delay 2 --max-time 30 \
                         --write-out '%{http_code}' \
@@ -364,12 +407,8 @@ jobs:
             esac
           done < "$RUNNER_TEMP/slice-paths.txt"
 
-          LABEL=""
-          if [ "$DRY_RUN" = "true" ]; then
-            LABEL=" &middot; dry run, nothing posted"
-          fi
           {
-            echo "## Cache invalidation${LABEL}"
+            echo "## Cache invalidation"
             echo
             echo "| Path | Status |"
             echo "| :--- | :--- |"
