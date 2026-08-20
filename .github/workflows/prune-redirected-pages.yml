@@ -1,13 +1,16 @@
 name: Prune redirected pages
 
 # Deploys run with --maxDeletes 0, so a page deleted from git keeps its object
-# in the bucket and keeps serving. This is the deliberate removal path:
-#   1. read every rule in the redirect file,
-#   2. check each rule against the live site,
-#   3. delete an object only when it sits behind a rule that really answers
-#      301 - unreachable through the site, safe to remove.
+# in the bucket and keeps serving. This is the deliberate removal path, driven
+# by the two contracts in the content repo:
+#   products.groupdocs.cloud.redirects.txt - pages that MOVED. Each rule is
+#     checked against the live site and its object deleted only once the URL
+#     really answers 301: unreachable behind a working redirect.
+#   products.groupdocs.cloud.retired.txt - pages that ENDED, no redirect.
+#     A listed object is deleted only when its source file is confirmed absent
+#     from git, after which the URL answers 404 - the intended signal.
 # Scheduled runs are always report-only; a live prune is an explicit dispatch
-# with dry_run=false, capped per run.
+# with dry_run=false, capped per run across both groups.
 
 on:
   schedule:
@@ -45,7 +48,7 @@ jobs:
       MAX_DELETES: ${{ inputs.max_deletes || '2000' }}
 
     steps:
-      - name: Checkout the redirect file
+      - name: Checkout the content repo
         uses: actions/checkout@v4
         with:
           repository: groupdocs-cloud/products.groupdocs.cloud
@@ -54,13 +57,14 @@ jobs:
           path: site
           fetch-depth: 1
 
-      # Both rule shapes the file carries: the generated block's capture-group
-      # form (one rule, English + 18 locale prefixes) and the historical
-      # literal form (one rule, one path, prefix included when it has one).
-      - name: Read the rules from the redirect file
+      # Redirect rules in both shapes the file carries - the generated
+      # capture-group form (one rule, English + 18 locale prefixes) and the
+      # historical literal form. Retired paths expand the same way, but are
+      # emitted only once their English source is confirmed absent from git.
+      - name: Read the contracts
         run: |
           python3 - "$RUNNER_TEMP" <<'PY'
-          import re, sys
+          import os, re, sys
           tmp = sys.argv[1]
           locales = "ar da de el es fa fr he id it ja ko pt ru th tr vi zh".split()
           grouped = re.compile(r'^rewrite \^\(/\(\?:[a-z|]+\)\)\?(/[^$]+)\$\s')
@@ -78,11 +82,27 @@ jobs:
               m = literal.match(line)
               if m:
                   paths.append(m.group(1))
-          with open(f"{tmp}/paths.txt", "w") as f:
+          with open(f"{tmp}/redirect-paths.txt", "w") as f:
               f.write("".join(p + "\n" for p in paths))
           with open(f"{tmp}/gate-path.txt", "w") as f:
               f.write((first_generated or paths[0]) + "\n")
-          print(f"{len(paths)} URLs behind redirect rules")
+
+          retired, held = [], 0
+          if os.path.exists("site/products.groupdocs.cloud.retired.txt"):
+              for line in open("site/products.groupdocs.cloud.retired.txt"):
+                  p = line.strip()
+                  if not p or p.startswith("#"):
+                      continue
+                  src = "site/content/english" + p.rstrip("/") + ".md"
+                  if os.path.exists(src):
+                      held += 1
+                      continue
+                  retired.append(p)
+                  retired.extend(f"/{l}{p}" for l in locales)
+          with open(f"{tmp}/retired-paths.txt", "w") as f:
+              f.write("".join(p + "\n" for p in retired))
+          print(f"{len(paths)} redirect URLs, {len(retired)} retired URLs"
+                f" ({held} held back: source still in git)")
           PY
 
       - name: Gate on live redirects
@@ -95,16 +115,17 @@ jobs:
             echo "live=true" >> "$GITHUB_OUTPUT"
           else
             echo "live=false" >> "$GITHUB_OUTPUT"
-            echo "redirects not live yet (\`$path\` answered $code) - nothing to prune" \
+            echo "redirect rules not live yet (\`$path\` answered $code); only retired pages are pruned" \
               | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Find rule objects still in the bucket
-        if: steps.gate.outputs.live == 'true'
+      - name: Find contract objects still in the bucket
         run: |
           set -euo pipefail
-          awk '{ sub(/^\//, ""); print $0 "index.html" }' "$RUNNER_TEMP/paths.txt" \
-            | sort -u > "$RUNNER_TEMP/expected.txt"
+          for src in redirect retired; do
+            awk '{ sub(/^\//, ""); print $0 "index.html" }' "$RUNNER_TEMP/$src-paths.txt" \
+              | sort -u > "$RUNNER_TEMP/$src-expected.txt"
+          done
           : > "$RUNNER_TEMP/listed.txt"
           for p in conversion/ ar/conversion/ da/conversion/ de/conversion/ el/conversion/ \
                    es/conversion/ fa/conversion/ fr/conversion/ he/conversion/ id/conversion/ \
@@ -127,61 +148,85 @@ jobs:
             done
           done
           sort -u "$RUNNER_TEMP/listed.txt" > "$RUNNER_TEMP/listed-sorted.txt"
-          comm -12 "$RUNNER_TEMP/expected.txt" "$RUNNER_TEMP/listed-sorted.txt" \
-            > "$RUNNER_TEMP/candidates.txt"
-          # Rule paths outside the listed prefixes (the historical rules) are
-          # few: probe them individually instead of listing their prefixes.
-          comm -23 "$RUNNER_TEMP/expected.txt" "$RUNNER_TEMP/listed-sorted.txt" \
+          for src in redirect retired; do
+            comm -12 "$RUNNER_TEMP/$src-expected.txt" "$RUNNER_TEMP/listed-sorted.txt" \
+              > "$RUNNER_TEMP/$src-candidates.txt"
+          done
+          # Rule paths outside the listed prefixes (historical rules) are few:
+          # probe them individually instead of widening the listing.
+          comm -23 "$RUNNER_TEMP/redirect-expected.txt" "$RUNNER_TEMP/listed-sorted.txt" \
             | grep -vE '^(ar|da|de|el|es|fa|fr|he|id|it|ja|ko|pt|ru|th|tr|vi|zh)?/?conversion/' \
             | while read -r key; do
                 if aws s3api head-object --bucket "$BUCKET" --key "$key" > /dev/null 2>&1; then
-                  echo "$key" >> "$RUNNER_TEMP/candidates.txt"
+                  echo "$key" >> "$RUNNER_TEMP/redirect-candidates.txt"
                 fi
               done || true
-          echo "expected $(wc -l < "$RUNNER_TEMP/expected.txt"), listed $(wc -l < "$RUNNER_TEMP/listed-sorted.txt"), candidates $(wc -l < "$RUNNER_TEMP/candidates.txt")"
+          echo "listed $(wc -l < "$RUNNER_TEMP/listed-sorted.txt");" \
+               "redirect candidates $(wc -l < "$RUNNER_TEMP/redirect-candidates.txt");" \
+               "retired candidates $(wc -l < "$RUNNER_TEMP/retired-candidates.txt")"
 
-      - name: Verify each rule live and delete the unreachable objects
-        if: steps.gate.outputs.live == 'true'
+      - name: Prune
+        env:
+          REDIRECTS_LIVE: ${{ steps.gate.outputs.live }}
         run: |
           set -euo pipefail
-          checked=0; deleted=0; skipped=0
+          budget=$MAX_DELETES
           : > "$RUNNER_TEMP/deleted.txt"
+
+          # Retired pages: source confirmed absent from git at derivation, no
+          # redirect to wait for - the 404 after deletion is the intent.
+          RET_DEL=0
           while read -r key; do
-            [ "$checked" -lt "$MAX_DELETES" ] || break
-            checked=$((checked + 1))
-            url="$SITE/${key%index.html}"
-            code=$(curl -s -o /dev/null --max-time 15 -w '%{http_code}' "$url" || echo 000)
-            if [ "$code" = "301" ]; then
-              if [ "$DRY" != "true" ]; then
-                aws s3api delete-object --bucket "$BUCKET" --key "$key" < /dev/null > /dev/null
-              fi
-              deleted=$((deleted + 1))
-              echo "$key" >> "$RUNNER_TEMP/deleted.txt"
-            else
-              skipped=$((skipped + 1))
-              if [ "$checked" -eq 25 ] && [ "$skipped" -eq 25 ]; then
-                echo "::error::redirects partially live - first 25 rules all unverified, refusing to continue"
-                exit 1
-              fi
+            [ "$budget" -gt 0 ] || break
+            budget=$((budget - 1))
+            if [ "$DRY" != "true" ]; then
+              aws s3api delete-object --bucket "$BUCKET" --key "$key" < /dev/null > /dev/null
             fi
-          done < "$RUNNER_TEMP/candidates.txt"
-          echo "CHECKED=$checked" >> "$GITHUB_ENV"
-          echo "DELETED=$deleted" >> "$GITHUB_ENV"
-          echo "SKIPPED=$skipped" >> "$GITHUB_ENV"
+            RET_DEL=$((RET_DEL + 1))
+            echo "$key" >> "$RUNNER_TEMP/deleted.txt"
+          done < "$RUNNER_TEMP/retired-candidates.txt"
+
+          # Redirected pages: each object's URL must itself answer 301 first.
+          CHECKED=0; RED_DEL=0; SKIPPED=0
+          if [ "$REDIRECTS_LIVE" = "true" ]; then
+            while read -r key; do
+              [ "$budget" -gt 0 ] || break
+              budget=$((budget - 1))
+              CHECKED=$((CHECKED + 1))
+              url="$SITE/${key%index.html}"
+              code=$(curl -s -o /dev/null --max-time 15 -w '%{http_code}' "$url" || echo 000)
+              if [ "$code" = "301" ]; then
+                if [ "$DRY" != "true" ]; then
+                  aws s3api delete-object --bucket "$BUCKET" --key "$key" < /dev/null > /dev/null
+                fi
+                RED_DEL=$((RED_DEL + 1))
+                echo "$key" >> "$RUNNER_TEMP/deleted.txt"
+              else
+                SKIPPED=$((SKIPPED + 1))
+                if [ "$CHECKED" -eq 25 ] && [ "$SKIPPED" -eq 25 ]; then
+                  echo "::error::redirects partially live - first 25 rules all unverified, refusing to continue"
+                  exit 1
+                fi
+              fi
+            done < "$RUNNER_TEMP/redirect-candidates.txt"
+          fi
+          {
+            echo "RET_DEL=$RET_DEL"; echo "RED_DEL=$RED_DEL"
+            echo "CHECKED=$CHECKED"; echo "SKIPPED=$SKIPPED"
+          } >> "$GITHUB_ENV"
 
       - name: Summary
-        if: always() && steps.gate.outputs.live == 'true'
+        if: always()
         run: |
           {
-            echo "## Prune redirected pages${DRY:+}"
+            echo "## Prune"
             echo
             echo "| | count |"
             echo "| :--- | ---: |"
-            echo "| Mode | ${DRY} (true = report only) |"
-            echo "| Rule URLs | $(wc -l < "$RUNNER_TEMP/paths.txt") |"
-            echo "| Candidates in bucket | $(wc -l < "$RUNNER_TEMP/candidates.txt") |"
-            echo "| Checked this run | ${CHECKED:-0} |"
-            echo "| $([ "$DRY" = "true" ] && echo 'Would delete' || echo 'Deleted') | ${DELETED:-0} |"
+            echo "| Mode | dry=${DRY} |"
+            echo "| Retired objects $([ "$DRY" = "true" ] && echo 'would delete' || echo deleted) | ${RET_DEL:-0} |"
+            echo "| Redirected objects checked | ${CHECKED:-0} |"
+            echo "| Redirected objects $([ "$DRY" = "true" ] && echo 'would delete' || echo deleted) | ${RED_DEL:-0} |"
             echo "| Skipped (rule not answering 301) | ${SKIPPED:-0} |"
             echo
             echo "Sample:"
