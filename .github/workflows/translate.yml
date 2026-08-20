@@ -2,12 +2,8 @@ name: Translate
 run-name: "Translate ${{ inputs.products || 'every product' }} → ${{ inputs.languages || 'every language' }}"
 
 on:
-  # Paused for the consolidation work. The redirect map retires a large part of
-  # the conversion matrix, and an hourly pass spends its budget translating pages
-  # that are about to be redirected away. Restore by uncommenting; dispatch stays
-  # available so a targeted run is still possible meanwhile.
-  # schedule:
-  #   - cron: "25 * * * *"
+  schedule:
+    - cron: "25 * * * *"
   workflow_dispatch:
     inputs:
       products:
