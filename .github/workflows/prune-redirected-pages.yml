@@ -101,8 +101,14 @@ jobs:
                   retired.extend(f"/{l}{p}" for l in locales)
           with open(f"{tmp}/retired-paths.txt", "w") as f:
               f.write("".join(p + "\n" for p in retired))
+          products = sorted({p.split("/")[1] for p in paths + retired if p.count("/") > 1})
+          with open(f"{tmp}/prefixes.txt", "w") as f:
+              for prod in products:
+                  f.write(f"{prod}/\n")
+                  f.write("".join(f"{l}/{prod}/\n" for l in locales))
           print(f"{len(paths)} redirect URLs, {len(retired)} retired URLs"
-                f" ({held} held back: source still in git)")
+                f" ({held} held back: source still in git); "
+                f"listing prefixes for: {', '.join(products)}")
           PY
 
       - name: Gate on live redirects
@@ -127,10 +133,7 @@ jobs:
               | sort -u > "$RUNNER_TEMP/$src-expected.txt"
           done
           : > "$RUNNER_TEMP/listed.txt"
-          for p in conversion/ ar/conversion/ da/conversion/ de/conversion/ el/conversion/ \
-                   es/conversion/ fa/conversion/ fr/conversion/ he/conversion/ id/conversion/ \
-                   it/conversion/ ja/conversion/ ko/conversion/ pt/conversion/ ru/conversion/ \
-                   th/conversion/ tr/conversion/ vi/conversion/ zh/conversion/; do
+          while read -r p; do
             token=""
             while :; do
               if [ -n "$token" ]; then
@@ -146,7 +149,7 @@ jobs:
               token=$(echo "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["t"] or "")')
               [ -n "$token" ] || break
             done
-          done
+          done < "$RUNNER_TEMP/prefixes.txt"
           sort -u "$RUNNER_TEMP/listed.txt" > "$RUNNER_TEMP/listed-sorted.txt"
           for src in redirect retired; do
             comm -12 "$RUNNER_TEMP/$src-expected.txt" "$RUNNER_TEMP/listed-sorted.txt" \
@@ -155,7 +158,7 @@ jobs:
           # Rule paths outside the listed prefixes (historical rules) are few:
           # probe them individually instead of widening the listing.
           comm -23 "$RUNNER_TEMP/redirect-expected.txt" "$RUNNER_TEMP/listed-sorted.txt" \
-            | grep -vE '^(ar|da|de|el|es|fa|fr|he|id|it|ja|ko|pt|ru|th|tr|vi|zh)?/?conversion/' \
+            | grep -vFf <(sed 's/$//' "$RUNNER_TEMP/prefixes.txt") \
             | while read -r key; do
                 if aws s3api head-object --bucket "$BUCKET" --key "$key" > /dev/null 2>&1; then
                   echo "$key" >> "$RUNNER_TEMP/redirect-candidates.txt"
