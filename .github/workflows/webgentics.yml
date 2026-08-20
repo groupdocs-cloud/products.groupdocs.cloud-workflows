@@ -78,6 +78,11 @@ jobs:
       AWS_ENDPOINT_URL: ${{ secrets.AWS_ENDPOINT_URL }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+      # Ceph RGW rejects the SDK's flexible-checksum uploads (trailing CRC,
+      # aws-chunked) with SignatureDoesNotMatch - seen on the gzipped section
+      # sitemaps. WHEN_REQUIRED restores plain signed puts.
+      AWS_REQUEST_CHECKSUM_CALCULATION: WHEN_REQUIRED
+      AWS_RESPONSE_CHECKSUM_VALIDATION: WHEN_REQUIRED
       SITE_URL: ${{ secrets.SITE_URL }}
       CONTENT_ROOT: content/english
 
