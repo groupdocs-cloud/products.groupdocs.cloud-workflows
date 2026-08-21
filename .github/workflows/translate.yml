@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       products:
-        description: "Comma-separated products, or empty for every product, each a slice"
+        description: "Comma-separated products, or empty for the demand rotation (2 anchors + 2 rotating slots)"
         required: false
         default: ""
         type: string
@@ -73,12 +73,14 @@ jobs:
           git config user.name "$GIT_AUTHOR_NAME"
           git config user.email "$GIT_AUTHOR_EMAIL"
 
-      # Every product gets a slice of every run, because discovery is breadth
-      # first only inside the product it was pointed at: one product holding
-      # the budget translates its deep pages while another still has no
-      # landing page at all. A product that finishes inside its slice hands
-      # the rest back, so the slices grow as products complete and the largest
-      # inherits the run.
+      # Four products a run, not a sliver of every product: with fifteen
+      # slices the share was shorter than the pages it opened, so slice ends
+      # abandoned whatever was in flight and runs spent themselves re-walking
+      # skip prefixes. conversion and viewer carry ~92% of search impressions
+      # and anchor every run; two slots rotate through the rest by run number,
+      # so every product sees budget within a day while capacity follows
+      # demand. A product that finishes inside its slice still hands the rest
+      # to the ones after it.
       - name: Translate
         run: |
           set -u
@@ -89,15 +91,33 @@ jobs:
           if [ -n "$PRODUCTS_INPUT" ]; then
             PRODUCTS=$(echo "$PRODUCTS_INPUT" | tr ',' '\n' | sed '/^$/d')
           else
-            PRODUCTS=$(for dir in site/content/english/*/; do
+            # Impressions per product, Search Console 2026-05-07..2026-08-05,
+            # all locales summed. Products on disk that the ranking does not
+            # know join the end of the rotation.
+            RANKED="conversion viewer parser metadata translation signature editor merger rewriter comparison assembly annotation watermark classification total"
+            EXISTING=$(for dir in site/content/english/*/; do
                 [ -d "$dir" ] || continue
-                printf '%s %s\n' "$(find "$dir" -name '*.md' | wc -l)" "$(basename "$dir")"
-              done | sort -n | awk '{print $2}')
+                basename "$dir"
+              done)
+            ORDERED=""
+            for p in $RANKED; do
+              echo "$EXISTING" | grep -qx "$p" && ORDERED="$ORDERED $p"
+            done
+            for e in $EXISTING; do
+              case " $RANKED " in *" $e "*) ;; *) ORDERED="$ORDERED $e" ;; esac
+            done
+            ANCHORS=$(echo $ORDERED | tr ' ' '\n' | head -2)
+            TAIL=$(echo $ORDERED | tr ' ' '\n' | tail -n +3)
+            TAIL_LEN=$(echo "$TAIL" | sed '/^$/d' | wc -l)
+            WINDOW=""
+            if [ "$TAIL_LEN" -gt 0 ]; then
+              START=$(( GITHUB_RUN_NUMBER * 2 % TAIL_LEN ))
+              WINDOW=$(echo "$TAIL" | awk -v s="$START" \
+                '{t[NR-1]=$0} END {for (i = 0; i < 2 && i < NR; i++) print t[(s + i) % NR]}')
+            fi
+            PRODUCTS=$(printf '%s\n%s\n' "$ANCHORS" "$WINDOW" | sed '/^$/d')
           fi
           TOTAL=$(echo "$PRODUCTS" | wc -l)
-          # Whoever the budget runs out on this run starts the next one.
-          PRODUCTS=$(echo "$PRODUCTS" | awk -v run="$GITHUB_RUN_NUMBER" \
-            '{p[NR]=$0} END {for (i = 0; i < NR; i++) print p[(i + run) % NR + 1]}')
           echo "order: $(echo $PRODUCTS | tr '\n' ' ')"
 
           INDEX=0
