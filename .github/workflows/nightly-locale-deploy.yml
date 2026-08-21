@@ -30,7 +30,7 @@ jobs:
       # config/ carries the definitions; themes/ only has to exist for the
       # theme module to resolve when `hugo config` loads the site.
       - name: Checkout the site configuration
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: groupdocs-cloud/products.groupdocs.cloud
           ref: master

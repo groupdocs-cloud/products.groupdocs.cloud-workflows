@@ -107,7 +107,7 @@ jobs:
       # resolves all three. fetch-depth 0 is what makes a bare SHA work at all
       # (a shallow fetch only carries branch tips), and separately it is what
       # gives each page its own sitemap lastmod instead of one shared date.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: groupdocs-cloud/products.groupdocs.cloud
           ref: ${{ inputs.sha_ref }}
@@ -130,7 +130,7 @@ jobs:
             echo
           } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
 

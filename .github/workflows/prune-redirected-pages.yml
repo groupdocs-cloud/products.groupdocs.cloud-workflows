@@ -37,7 +37,7 @@ jobs:
 
     steps:
       - name: Checkout the redirect file
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: groupdocs-cloud/products.groupdocs.cloud
           ref: master
