@@ -89,7 +89,10 @@ jobs:
 
       # The default target list is the site's own roster: the effective Hugo
       # config's languages minus the default content language, so a language
-      # added to the site starts translating without a workflow edit.
+      # added to the site starts translating without a workflow edit. The
+      # order is search demand, because a run that ends on its budget has
+      # translated a prefix of it, and the page-major walk spends that prefix
+      # on every page it reaches.
       - name: Resolve the target languages
         id: languages
         env:
@@ -104,8 +107,13 @@ jobs:
           python3 - >> "$GITHUB_OUTPUT" <<'PY'
           import json, os
           cfg = json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "effective.json")))
-          langs = sorted(set(cfg["languages"]) - {cfg["defaultcontentlanguage"]})
-          print("list=" + ",".join(langs))
+          langs = set(cfg["languages"]) - {cfg["defaultcontentlanguage"]}
+          # Impressions per locale, Search Console 2026-05-23..2026-08-18: ru
+          # alone is 18% of the site's demand and da is 0.03%. A language the
+          # site adds that is not ranked here joins the end alphabetically.
+          ranked = "ru es pt id fr it fa ja de zh he ar vi ko el tr th da".split()
+          order = [l for l in ranked if l in langs] + sorted(langs - set(ranked))
+          print("list=" + ",".join(order))
           PY
 
       # Four products a run, not a sliver of every product: with fifteen
