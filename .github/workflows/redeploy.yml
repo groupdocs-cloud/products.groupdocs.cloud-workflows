@@ -1,32 +1,16 @@
 name: Redeploy
 run-name: "Redeploy ${{ inputs.groups || 'every group' }} &rarr; ${{ inputs.environment }}"
 
-# Deploys the whole site - every segment, every language - as a few dozen
-# Webgentics runs instead of one per segment. This is the sweep for a change
-# that touches pages no translation wrote: a theme edit, an i18n string, a
-# config change. The hourly translate run already deploys the segments its
-# own translations touch, so nothing here is on a schedule.
+# Deploys the whole site by dispatching the Webgentics workflow once per
+# group instead of once per segment: fourteen runs for all 476 segments.
+# This is the sweep for a change no translation writes - a theme edit, an
+# i18n string, a config change. The hourly translate run already deploys
+# the segments its own translations touch, so nothing here is scheduled.
 #
-# A group is one Webgentics run carrying one product across every language.
-# Sizing is what decides the boundaries, and it is measured rather than
-# listed: a base name whose English tree holds at least GROUP_MIN_PAGES pages
-# earns a run of its own, anything smaller joins the shared `products` run,
-# and `index` and `home` - the sitemaps, robots and the front pages - always
-# travel together. So `viewer` is one run of 19 languages, each conversion
-# platform is its own, and the eleven products with no format pages are one
-# run between them. A product that grows format pages separates itself the
-# day it crosses the line; none of this file changes.
-#
-# Every page is assumed to exist in every language, because translate.yml is
-# continuously filling that in - sizing against today's partial corpus would
-# plan a fan-out that stops fitting halfway through the year.
-#
-# A group that would not fit one runner is split into language batches until
-# it does. The memory model is webgentics.yml's - that workflow owns it and
-# states it; the two constants are mirrored here only to size the batches,
-# and RUNNER_SHARE keeps a group well inside the ceiling that predictor warns
-# at, because a plan made here is spent on a runner that cannot be asked
-# afterwards how much room was left.
+# A group is one run carrying one product in every language. The products
+# with format pages get a group each; the twelve without share one. The
+# list below is the whole of it - a language or a product added to the
+# site is added here too.
 
 on:
   workflow_dispatch:
@@ -37,12 +21,7 @@ on:
         default: production
         required: true
       groups:
-        description: "Comma-separated group names, or empty for every group"
-        required: false
-        default: ""
-        type: string
-      languages:
-        description: "Comma-separated language codes to narrow every group, or empty for every language"
+        description: "Space-separated group names, or empty for every group"
         required: false
         default: ""
         type: string
@@ -51,183 +30,33 @@ on:
         required: false
         default: master
         type: string
-      plan_only:
-        description: "Print the plan and dispatch nothing"
-        required: false
-        default: false
-        type: boolean
 
 permissions:
-  contents: read
   actions: write
 
 jobs:
   redeploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
-      # config/ carries the segment definitions and themes/ only has to exist
-      # for the theme module to resolve. blob:none keeps every tree, so the
-      # page counts below come from `git ls-tree` without ever materializing
-      # the twenty-odd thousand content files.
-      - name: Checkout the site configuration
-        uses: actions/checkout@v7
-        with:
-          repository: groupdocs-cloud/products.groupdocs.cloud
-          ref: ${{ inputs.sha_ref }}
-          token: ${{ secrets.REPO_TOKEN }}
-          path: site
-          sparse-checkout: |
-            config
-            themes
-          fetch-depth: 1
-
-      - name: Install Hugo
-        uses: peaceiris/actions-hugo@v3
-        with:
-          extended: true
-
-      - name: Plan the groups
-        run: |
-          set -euo pipefail
-          hugo config --source site --environment "${{ inputs.environment }}" --format json \
-            > "$RUNNER_TEMP/effective.json"
-          git -C site ls-tree -r HEAD --name-only -- content/english > "$RUNNER_TEMP/pages.txt"
-          [ -s "$RUNNER_TEMP/pages.txt" ] || { echo "::error::no content paths at this ref"; exit 1; }
-          python3 - > "$RUNNER_TEMP/plan.tsv" <<'PY'
-          import json, os, re, collections
-
-          GROUP_MIN_PAGES = 100     # english pages before a base earns its own run
-          FLOOR_MIB, KIB_PER_PAGE, RUNNER_SHARE = 350, 160, 0.65
-
-          tmp = os.environ["RUNNER_TEMP"]
-          cfg = json.load(open(f"{tmp}/effective.json"))
-          segments = cfg["segments"]
-          default_language = cfg["defaultcontentlanguage"]
-          languages = sorted(cfg["languages"])
-          wanted_groups = {g.strip() for g in os.environ.get("ONLY_GROUPS", "").split(",") if g.strip()}
-          wanted_langs = {l.strip() for l in os.environ.get("ONLY_LANGUAGES", "").split(",") if l.strip()}
-          runner_mib = int(re.search(r"^MemTotal:\s+(\d+)", open("/proc/meminfo").read(), re.M).group(1)) / 1024
-
-          def split_key(key):
-              lang, _, base = key.partition(":")
-              return (lang, base) if base else (default_language, key)
-
-          # The path globs a base claims. Every language states the same ones,
-          # so the first key that names a base settles it.
-          claims = {}
-          for key, segment in segments.items():
-              base = split_key(key)[1]
-              if base in claims:
-                  continue
-              claims[base] = [
-                  alt.strip()
-                  for include in segment.get("includes", [])
-                  for alt in (include.get("path") or "").strip("{}").split(",")
-                  if alt.strip()
-              ]
-
-          subtrees, exacts = {}, {}
-          for base, paths in claims.items():
-              for path in paths:
-                  if path.endswith("/**"):
-                      subtrees[path[1:-3].rstrip("/")] = base
-                  elif path == "/":
-                      exacts[""] = base
-                  else:
-                      exacts[path[1:].rstrip("/")] = base
-
-          # A page belongs to the deepest subtree that claims it, so
-          # /conversion/net wins over /conversion for a page under both.
-          pages = collections.Counter()
-          for line in open(f"{tmp}/pages.txt"):
-              relative = line.strip()[len("content/english/"):]
-              if not relative.endswith(".md"):
-                  continue
-              claimed, depth = None, -1
-              for prefix, base in subtrees.items():
-                  if relative.startswith(prefix + "/") and len(prefix) > depth:
-                      claimed, depth = base, len(prefix)
-              if claimed is None:
-                  for exact, base in exacts.items():
-                      if relative == (f"{exact}/_index.md" if exact else "_index.md"):
-                          claimed = base
-                          break
-              if claimed:
-                  pages[claimed] += 1
-
-          groups = collections.defaultdict(list)
-          for base in claims:
-              if base in ("index", "home"):
-                  groups["home"].append(base)
-              elif pages[base] >= GROUP_MIN_PAGES:
-                  groups[base].append(base)
-              else:
-                  groups["products"].append(base)
-
-          def predicted(page_count):
-              return round(FLOOR_MIB + page_count * KIB_PER_PAGE / 1024)
-
-          # Every english page is assumed present in every language.
-          budget = max(1, int((runner_mib * RUNNER_SHARE - FLOOR_MIB) * 1024 / KIB_PER_PAGE))
-          plan = []
-          for group, bases in sorted(groups.items(), key=lambda kv: -sum(pages[b] for b in kv[1])):
-              if wanted_groups and group not in wanted_groups:
-                  continue
-              english = sum(pages[b] for b in bases) or 1
-              members = collections.defaultdict(list)
-              for key in segments:
-                  language, base = split_key(key)
-                  if base in bases and (not wanted_langs or language in wanted_langs):
-                      members[language].append(key)
-              if not members:
-                  continue
-              per_batch = max(1, budget // english)
-              batch_languages = sorted(members)
-              batches = [batch_languages[i:i + per_batch] for i in range(0, len(batch_languages), per_batch)]
-              for number, batch in enumerate(batches, 1):
-                  names = sorted(k for language in batch for k in members[language])
-                  label = group if len(batches) == 1 else f"{group}-{number}of{len(batches)}"
-                  total = english * len(batch)
-                  print(f"{label}\t{','.join(names)}\t{len(names)}\t{total}\t{predicted(total)}")
-          PY
-          [ -s "$RUNNER_TEMP/plan.tsv" ] || { echo "::error::no group matched"; exit 1; }
-          {
-            echo "## Redeploy plan &middot; ${{ inputs.environment }}"
-            echo
-            echo "| Group | Segments | Pages | Predicted peak |"
-            echo "| :--- | ---: | ---: | ---: |"
-            awk -F'\t' '{ printf "| `%s` | %s | %s | %s MiB |\n", $1, $3, $4, $5 }' "$RUNNER_TEMP/plan.tsv"
-            echo
-            echo "$(wc -l < "$RUNNER_TEMP/plan.tsv") groups, $(awk -F'\t' '{n += $3} END {print n}' "$RUNNER_TEMP/plan.tsv") segments."
-            echo
-          } | tee -a "$GITHUB_STEP_SUMMARY"
-        env:
-          # Not GROUPS: bash owns that name - it holds the caller's group ids,
-          # so an inherited value never reaches the script and the filter
-          # would silently select everything.
-          ONLY_GROUPS: ${{ inputs.groups }}
-          ONLY_LANGUAGES: ${{ inputs.languages }}
-
-      # Each group's run succeeds or fails on its own in the Webgentics
-      # workflow's history; this job only guarantees the dispatches were
-      # accepted. A failed dispatch is fatal here, unlike the per-run failure
-      # a translate deploy shrugs off, because nothing else will retry a
-      # sweep: the group simply would not ship.
       - name: Dispatch one deploy per group
-        if: ${{ !inputs.plan_only }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ONLY: ${{ inputs.groups }}
         run: |
           set -euo pipefail
           failed=0
           {
-            echo "## Dispatches"
+            echo "## Redeploy &middot; ${{ inputs.environment }}"
             echo
-            echo "| Group | Operation | Result |"
-            echo "| :--- | :--- | :--- |"
+            echo "| Group | Segments | Dispatch |"
+            echo "| :--- | ---: | :--- |"
           } >> "$GITHUB_STEP_SUMMARY"
-          while IFS=$'\t' read -r group segments count pages peak; do
+
+          while read -r group segments; do
+            [ -n "$group" ] || continue
+            case "${ONLY:-}" in "") ;; *" $group "*|"$group "*|*" $group"|"$group") ;; *) continue ;; esac
+
             op="redeploy-${group}-${GITHUB_RUN_NUMBER}"
             ok=""
             for attempt in 1 2 3; do
@@ -236,21 +65,38 @@ jobs:
                 -H "Authorization: Bearer $GH_TOKEN" \
                 -H "Accept: application/vnd.github+json" \
                 "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/webgentics.yml/dispatches" \
-                -d "$(jq -nc --arg op "$op" --arg seg "$segments" --arg env "${{ inputs.environment }}" \
-                       --arg ref "${{ inputs.sha_ref }}" \
-                       '{ref: "master", inputs: {operation_id: $op, operation_kind: "connector.deploy",
-                          sha_ref: $ref, website_id: "products.groupdocs.cloud",
-                          environment: $env, segments: $seg}}')" \
+                -d "$(jq -nc --arg op "$op" --arg seg "$segments" \
+                        --arg env "${{ inputs.environment }}" --arg ref "${{ inputs.sha_ref }}" \
+                        '{ref: "master", inputs: {operation_id: $op, operation_kind: "connector.deploy",
+                           sha_ref: $ref, website_id: "products.groupdocs.cloud",
+                           environment: $env, segments: $seg}}')" \
                 || echo 000)
-              if [ "$code" = "204" ]; then ok=yes; break; fi
+              [ "$code" = "204" ] && { ok=yes; break; }
               sleep $(( attempt * 5 ))
             done
+
+            n=$(( $(echo "$segments" | tr -cd ',' | wc -c) + 1 ))
             if [ -n "$ok" ]; then
-              echo "| \`$group\` | \`$op\` | queued |" >> "$GITHUB_STEP_SUMMARY"
+              echo "| \`$group\` | $n | queued as \`$op\` |" >> "$GITHUB_STEP_SUMMARY"
             else
-              echo "| \`$group\` | \`$op\` | **failed ($code)** |" >> "$GITHUB_STEP_SUMMARY"
+              echo "| \`$group\` | $n | **failed ($code)** |" >> "$GITHUB_STEP_SUMMARY"
               echo "::error::dispatch failed for $group (HTTP $code): $(head -c 200 "$RUNNER_TEMP/resp.txt")"
               failed=$(( failed + 1 ))
             fi
-          done < "$RUNNER_TEMP/plan.tsv"
+          done <<'GROUPS'
+          home index,home,ar:home,da:home,de:home,el:home,es:home,fa:home,fr:home,he:home,id:home,it:home,ja:home,ko:home,pt:home,ru:home,th:home,tr:home,vi:home,zh:home
+          products annotation,ar:annotation,da:annotation,de:annotation,el:annotation,es:annotation,fa:annotation,fr:annotation,he:annotation,id:annotation,it:annotation,ja:annotation,ko:annotation,pt:annotation,ru:annotation,th:annotation,tr:annotation,vi:annotation,zh:annotation,assembly,ar:assembly,da:assembly,de:assembly,el:assembly,es:assembly,fa:assembly,fr:assembly,he:assembly,id:assembly,it:assembly,ja:assembly,ko:assembly,pt:assembly,ru:assembly,th:assembly,tr:assembly,vi:assembly,zh:assembly,classification,ar:classification,da:classification,de:classification,el:classification,es:classification,fa:classification,fr:classification,he:classification,id:classification,it:classification,ja:classification,ko:classification,pt:classification,ru:classification,th:classification,tr:classification,vi:classification,zh:classification,comparison,ar:comparison,da:comparison,de:comparison,el:comparison,es:comparison,fa:comparison,fr:comparison,he:comparison,id:comparison,it:comparison,ja:comparison,ko:comparison,pt:comparison,ru:comparison,th:comparison,tr:comparison,vi:comparison,zh:comparison,conversion-home,ar:conversion-home,da:conversion-home,de:conversion-home,el:conversion-home,es:conversion-home,fa:conversion-home,fr:conversion-home,he:conversion-home,id:conversion-home,it:conversion-home,ja:conversion-home,ko:conversion-home,pt:conversion-home,ru:conversion-home,th:conversion-home,tr:conversion-home,vi:conversion-home,zh:conversion-home,editor,ar:editor,da:editor,de:editor,el:editor,es:editor,fa:editor,fr:editor,he:editor,id:editor,it:editor,ja:editor,ko:editor,pt:editor,ru:editor,th:editor,tr:editor,vi:editor,zh:editor,merger,ar:merger,da:merger,de:merger,el:merger,es:merger,fa:merger,fr:merger,he:merger,id:merger,it:merger,ja:merger,ko:merger,pt:merger,ru:merger,th:merger,tr:merger,vi:merger,zh:merger,rewriter,ar:rewriter,da:rewriter,de:rewriter,el:rewriter,es:rewriter,fa:rewriter,fr:rewriter,he:rewriter,id:rewriter,it:rewriter,ja:rewriter,ko:rewriter,pt:rewriter,ru:rewriter,th:rewriter,tr:rewriter,vi:rewriter,zh:rewriter,signature,ar:signature,da:signature,de:signature,el:signature,es:signature,fa:signature,fr:signature,he:signature,id:signature,it:signature,ja:signature,ko:signature,pt:signature,ru:signature,th:signature,tr:signature,vi:signature,zh:signature,total,ar:total,da:total,de:total,el:total,es:total,fa:total,fr:total,he:total,id:total,it:total,ja:total,ko:total,pt:total,ru:total,th:total,tr:total,vi:total,zh:total,translation,ar:translation,da:translation,de:translation,el:translation,es:translation,fa:translation,fr:translation,he:translation,id:translation,it:translation,ja:translation,ko:translation,pt:translation,ru:translation,th:translation,tr:translation,vi:translation,zh:translation,watermark,ar:watermark,da:watermark,de:watermark,el:watermark,es:watermark,fa:watermark,fr:watermark,he:watermark,id:watermark,it:watermark,ja:watermark,ko:watermark,pt:watermark,ru:watermark,th:watermark,tr:watermark,vi:watermark,zh:watermark
+          viewer viewer,ar:viewer,da:viewer,de:viewer,el:viewer,es:viewer,fa:viewer,fr:viewer,he:viewer,id:viewer,it:viewer,ja:viewer,ko:viewer,pt:viewer,ru:viewer,th:viewer,tr:viewer,vi:viewer,zh:viewer
+          metadata metadata,ar:metadata,da:metadata,de:metadata,el:metadata,es:metadata,fa:metadata,fr:metadata,he:metadata,id:metadata,it:metadata,ja:metadata,ko:metadata,pt:metadata,ru:metadata,th:metadata,tr:metadata,vi:metadata,zh:metadata
+          parser parser,ar:parser,da:parser,de:parser,el:parser,es:parser,fa:parser,fr:parser,he:parser,id:parser,it:parser,ja:parser,ko:parser,pt:parser,ru:parser,th:parser,tr:parser,vi:parser,zh:parser
+          conversion-android conversion-android,ar:conversion-android,da:conversion-android,de:conversion-android,el:conversion-android,es:conversion-android,fa:conversion-android,fr:conversion-android,he:conversion-android,id:conversion-android,it:conversion-android,ja:conversion-android,ko:conversion-android,pt:conversion-android,ru:conversion-android,th:conversion-android,tr:conversion-android,vi:conversion-android,zh:conversion-android
+          conversion-curl conversion-curl,ar:conversion-curl,da:conversion-curl,de:conversion-curl,el:conversion-curl,es:conversion-curl,fa:conversion-curl,fr:conversion-curl,he:conversion-curl,id:conversion-curl,it:conversion-curl,ja:conversion-curl,ko:conversion-curl,pt:conversion-curl,ru:conversion-curl,th:conversion-curl,tr:conversion-curl,vi:conversion-curl,zh:conversion-curl
+          conversion-go conversion-go,ar:conversion-go,da:conversion-go,de:conversion-go,el:conversion-go,es:conversion-go,fa:conversion-go,fr:conversion-go,he:conversion-go,id:conversion-go,it:conversion-go,ja:conversion-go,ko:conversion-go,pt:conversion-go,ru:conversion-go,th:conversion-go,tr:conversion-go,vi:conversion-go,zh:conversion-go
+          conversion-java conversion-java,ar:conversion-java,da:conversion-java,de:conversion-java,el:conversion-java,es:conversion-java,fa:conversion-java,fr:conversion-java,he:conversion-java,id:conversion-java,it:conversion-java,ja:conversion-java,ko:conversion-java,pt:conversion-java,ru:conversion-java,th:conversion-java,tr:conversion-java,vi:conversion-java,zh:conversion-java
+          conversion-net conversion-net,ar:conversion-net,da:conversion-net,de:conversion-net,el:conversion-net,es:conversion-net,fa:conversion-net,fr:conversion-net,he:conversion-net,id:conversion-net,it:conversion-net,ja:conversion-net,ko:conversion-net,pt:conversion-net,ru:conversion-net,th:conversion-net,tr:conversion-net,vi:conversion-net,zh:conversion-net
+          conversion-nodejs conversion-nodejs,ar:conversion-nodejs,da:conversion-nodejs,de:conversion-nodejs,el:conversion-nodejs,es:conversion-nodejs,fa:conversion-nodejs,fr:conversion-nodejs,he:conversion-nodejs,id:conversion-nodejs,it:conversion-nodejs,ja:conversion-nodejs,ko:conversion-nodejs,pt:conversion-nodejs,ru:conversion-nodejs,th:conversion-nodejs,tr:conversion-nodejs,vi:conversion-nodejs,zh:conversion-nodejs
+          conversion-php conversion-php,ar:conversion-php,da:conversion-php,de:conversion-php,el:conversion-php,es:conversion-php,fa:conversion-php,fr:conversion-php,he:conversion-php,id:conversion-php,it:conversion-php,ja:conversion-php,ko:conversion-php,pt:conversion-php,ru:conversion-php,th:conversion-php,tr:conversion-php,vi:conversion-php,zh:conversion-php
+          conversion-python conversion-python,ar:conversion-python,da:conversion-python,de:conversion-python,el:conversion-python,es:conversion-python,fa:conversion-python,fr:conversion-python,he:conversion-python,id:conversion-python,it:conversion-python,ja:conversion-python,ko:conversion-python,pt:conversion-python,ru:conversion-python,th:conversion-python,tr:conversion-python,vi:conversion-python,zh:conversion-python
+          conversion-ruby conversion-ruby,ar:conversion-ruby,da:conversion-ruby,de:conversion-ruby,el:conversion-ruby,es:conversion-ruby,fa:conversion-ruby,fr:conversion-ruby,he:conversion-ruby,id:conversion-ruby,it:conversion-ruby,ja:conversion-ruby,ko:conversion-ruby,pt:conversion-ruby,ru:conversion-ruby,th:conversion-ruby,tr:conversion-ruby,vi:conversion-ruby,zh:conversion-ruby
+          GROUPS
           [ "$failed" -eq 0 ]
