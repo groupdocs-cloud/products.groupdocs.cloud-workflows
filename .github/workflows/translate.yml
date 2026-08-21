@@ -38,6 +38,10 @@ concurrency:
   group: translate
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  actions: write
+
 jobs:
   translate:
     name: Translate
@@ -72,6 +76,11 @@ jobs:
         run: |
           git config user.name "$GIT_AUTHOR_NAME"
           git config user.email "$GIT_AUTHOR_EMAIL"
+
+      - name: Record the pre-run head
+        id: base
+        working-directory: site
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       # Four products a run, not a sliver of every product: with fifteen
       # slices the share was shorter than the pages it opened, so slice ends
@@ -236,6 +245,75 @@ jobs:
             sleep 10
           done
           exit 1
+
+      # What landed on master decides what redeploys: every translated file
+      # maps to its language's segment, and one Webgentics dispatch per
+      # language carries exactly the touched segments, so translations reach
+      # the bucket within the hour instead of waiting for a nightly sweep.
+      # Diffing against origin/master deploys only what really pushed, and a
+      # dispatch that fails is a warning - the same segment redeploys with the
+      # next run that lands a translation in it.
+      - name: Deploy the touched segments
+        if: always()
+        working-directory: site
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE: ${{ steps.base.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch -q origin master
+          SEGMENTS=$(git diff --name-only "$BASE..origin/master" -- translated-content/ | awk -F/ '
+            {
+              n = split($NF, parts, ".")
+              if (n < 3) next
+              lang = parts[n-1]
+              seg = $2
+              if (seg == "conversion") {
+                if ($3 ~ /\./ || $3 == "family") seg = "conversion-home"
+                else seg = "conversion-" $3
+              }
+              print lang ":" seg
+            }' | sort -u)
+          if [ -z "$SEGMENTS" ]; then
+            echo "no translated files landed; nothing to deploy"
+            exit 0
+          fi
+          failed=0
+          total=0
+          {
+            echo "## Segment deploys"
+            echo
+            echo "| Language | Segments | Dispatch |"
+            echo "| :--- | :--- | :--- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for lang in $(echo "$SEGMENTS" | cut -d: -f1 | sort -u); do
+            list=$(echo "$SEGMENTS" | grep "^$lang:" | paste -sd, -)
+            total=$(( total + 1 ))
+            op="l10n-${lang}-${GITHUB_RUN_NUMBER}"
+            ok=""
+            for attempt in 1 2 3; do
+              code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+                -X POST \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/webgentics.yml/dispatches" \
+                -d "{\"ref\":\"master\",\"inputs\":{\"operation_id\":\"$op\",\"operation_kind\":\"connector.deploy\",\"sha_ref\":\"master\",\"website_id\":\"products.groupdocs.cloud\",\"segments\":\"$list\"}}" \
+                || echo 000)
+              if [ "$code" = "204" ]; then ok=yes; break; fi
+              sleep $(( attempt * 5 ))
+            done
+            if [ -n "$ok" ]; then
+              echo "| $lang | $list | queued as \`$op\` |" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "| $lang | $list | **failed ($code)** |" >> "$GITHUB_STEP_SUMMARY"
+              echo "::warning::deploy dispatch failed for $lang (HTTP $code)"
+              failed=$(( failed + 1 ))
+            fi
+          done
+          if [ "$failed" -eq "$total" ]; then
+            echo "::error::every deploy dispatch failed"
+            exit 1
+          fi
 
       - name: Summary
         if: always()

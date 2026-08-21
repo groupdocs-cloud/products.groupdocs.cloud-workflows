@@ -1,17 +1,15 @@
-name: Nightly locale deploy
+name: Locale deploy fan-out
 
-# Translations land in the content repo every hour; this fans out one
-# Webgentics deploy per language every night so the accumulated work - and
-# any locale family page that gained its translation - reaches the bucket.
-# Each language's segment list is read from the content repo's
-# config/_default/segments.yaml at run time, so this file never carries a
-# copy that can drift. The dispatched runs succeed or fail individually in
-# the Webgentics workflow's own history; this job only guarantees the
-# dispatches were accepted.
+# Fans out one Webgentics deploy per language over every locale segment.
+# The hourly translate run deploys the segments its own translations touch,
+# so this is dispatch-only: the manual sweep for changes that touch every
+# locale page at once, such as a theme edit. Each language's segment list is
+# read from the content repo's config/_default/segments.yaml at run time, so
+# this file never carries a copy that can drift. The dispatched runs succeed
+# or fail individually in the Webgentics workflow's own history; this job
+# only guarantees the dispatches were accepted.
 
 on:
-  schedule:
-    - cron: "10 2 * * *"
   workflow_dispatch:
     inputs:
       languages:
