@@ -182,8 +182,13 @@ jobs:
               continue
             fi
 
-            CONTAINER_NAME="translagent-${GITHUB_RUN_ID}-${product}"
-            PRODUCT_OFFICIAL="GroupDocs.$(echo "$product" | sed 's/./\U&/')"
+            # A product may name a subtree - `viewer/android` is how a run is
+            # pointed at the pages that carry the demand, which is where this
+            # tool takes its priority from. Docker rejects a slash in a
+            # container name, and the product a report is filed under is the
+            # top of the path either way.
+            CONTAINER_NAME="translagent-${GITHUB_RUN_ID}-$(echo "$product" | tr '/' '-')"
+            PRODUCT_OFFICIAL="GroupDocs.$(echo "${product%%/*}" | sed 's/./\U&/')"
             export OTEL_RESOURCE_ATTRIBUTES="service.namespace=$GIT_AUTHOR_NAME,deployment.environment.name=$ENVIRONMENT,deployment.environment=$ENVIRONMENT,aspose.agent.report=true,aspose.agent.product=$PRODUCT_OFFICIAL,aspose.agent.item=Product Pages,aspose.agent.job=Translation,aspose.agent.website=groupdocs.cloud,aspose.agent.website_section=Product Pages"
 
             echo "::group::$product (${SLICE}s slice of ${remaining}s left)"
