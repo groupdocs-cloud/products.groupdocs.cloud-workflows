@@ -4,7 +4,9 @@ run-name: "Webgentics-Operation: ${{ inputs.operation_id }}"
 # The workflow webgentics dispatches: one run per operation, its id echoed
 # into the run name above. Any operation_kind but connector.deploy fails the
 # run; a connector.deploy deploys the content repository at sha_ref to the
-# live site. website_id is declared for the dispatch contract and read by
+# environment the request names, production unless a dispatch says otherwise -
+# which decides the baseURL, the bucket and everything else Hugo resolves per
+# environment. website_id is declared for the dispatch contract and read by
 # nothing here.
 #
 # Segments are defined in the content repository, in Hugo's own
@@ -58,6 +60,11 @@ on:
         description: Webgentics Website ID
         type: string
         required: true
+      environment:
+        description: Build and deploy environment
+        type: environment
+        default: production
+        required: true
       segments:
         description: Comma-separated segment names from the Hugo project repository
         type: string
@@ -70,10 +77,10 @@ jobs:
     # RUNS_ON at repository or environment level to move builds onto a bigger
     # or self-hosted runner. Unset, it stays on ubuntu-latest.
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
-    environment: production
+    environment: ${{ inputs.environment }}
     env:
-      NODE_ENV: production
-      HUGO_ENVIRONMENT: production
+      NODE_ENV: ${{ inputs.environment }}
+      HUGO_ENVIRONMENT: ${{ inputs.environment }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_ENDPOINT_URL: ${{ secrets.AWS_ENDPOINT_URL }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -83,7 +90,6 @@ jobs:
       # sitemaps. WHEN_REQUIRED restores plain signed puts.
       AWS_REQUEST_CHECKSUM_CALCULATION: WHEN_REQUIRED
       AWS_RESPONSE_CHECKSUM_VALIDATION: WHEN_REQUIRED
-      SITE_URL: ${{ secrets.SITE_URL }}
       CONTENT_ROOT: content/english
 
     steps:
@@ -112,7 +118,7 @@ jobs:
         run: |
           set -euo pipefail
           {
-            echo "# Deploy &middot; \`${{ inputs.segments || 'every segment' }}\` &rarr; production"
+            echo "# Deploy &middot; \`${{ inputs.segments || 'every segment' }}\` &rarr; ${{ inputs.environment }}"
             echo
             echo "| Request | |"
             echo "| :--- | :--- |"
@@ -164,7 +170,7 @@ jobs:
             } >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          hugo config --format json > "$RUNNER_TEMP/effective.json"
+          hugo config --environment=${{ inputs.environment }} --format json > "$RUNNER_TEMP/effective.json"
           node - <<'NODE'
           const fs = require('fs')
           const cfg = require(`${process.env.RUNNER_TEMP}/effective.json`)
@@ -212,7 +218,7 @@ jobs:
       - name: Verify the slice took effect
         run: |
           set -euo pipefail
-          hugo config --format json > "$RUNNER_TEMP/effective.json"
+          hugo config --environment=${{ inputs.environment }} --format json > "$RUNNER_TEMP/effective.json"
           node - <<'NODE'
           const fs = require('fs')
           const summary = process.env.GITHUB_STEP_SUMMARY
@@ -308,7 +314,7 @@ jobs:
           # ignoreFiles it was derived from, so what Hugo renders and what it
           # loads come from one list and cannot disagree.
           /usr/bin/time -v -o "$RUNNER_TEMP/time.txt" \
-            hugo --environment=production
+            hugo --environment=${{ inputs.environment }}
           PEAK_KB=$(awk '/Maximum resident set size/ {print $NF}' "$RUNNER_TEMP/time.txt")
           WALL=$(awk -F': ' '/Elapsed \(wall clock\)/ {print $2}' "$RUNNER_TEMP/time.txt")
           PAGES=$(find public -name '*.html' | wc -l)
@@ -343,7 +349,7 @@ jobs:
             echo
           } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
           hugo deploy \
-            --environment=production \
+            --environment=${{ inputs.environment }} \
             --maxDeletes 0
 
       # Purges what shipped, from the same path list the slice was built from.
