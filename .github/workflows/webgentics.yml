@@ -90,7 +90,6 @@ jobs:
       # sitemaps. WHEN_REQUIRED restores plain signed puts.
       AWS_REQUEST_CHECKSUM_CALCULATION: WHEN_REQUIRED
       AWS_RESPONSE_CHECKSUM_VALIDATION: WHEN_REQUIRED
-      CONTENT_ROOT: content/english
 
     steps:
       # An unhandled kind must be a red run, never a silent green.
@@ -239,26 +238,52 @@ jobs:
           if (bad) process.exit(1)
 
           const res = want.ignoreFiles.map(r => new RegExp(r))
-          const root = process.env.CONTENT_ROOT
           const selected = p => p.endsWith('.md') && !res.some(r => r.test(p))
+
+          // Hugo loads every tree mounted at content/, and a slice holds every
+          // language it leaves enabled. Counting the english tree alone
+          // under-reported a multi-language slice by as many times as it had
+          // languages - 5% predicted where the real peak was half the runner.
+          // The mounts come from the effective config, so this counts whatever
+          // the site mounts rather than a list kept here.
+          const known = new Set(Object.keys(eff.languages || {}))
+          const enabled = new Set([...known].filter(l => !(want.disableLanguages || []).includes(l)))
+          // Hugo reads `x.fr.md` as French only because `fr` is a configured
+          // language; `tar.gz.md` is an english page about tar.gz, not a page
+          // in the `gz` language, and thirteen of them are.
+          const languageOf = p => {
+            const suffix = (p.match(/\.([a-z]{2})\.md$/) || [])[1]
+            return suffix && known.has(suffix) ? suffix : eff.defaultcontentlanguage
+          }
+          const kept = p => selected(p) && enabled.has(languageOf(p))
+          const roots = (eff.module?.mounts || [])
+            .filter(m => (m.target || '') === 'content' || (m.target || '').startsWith('content/'))
+            .map(m => m.source)
+            .filter(s => fs.existsSync(s))
+          if (!roots.length) {
+            console.log('::error::the effective config mounts nothing at content/')
+            process.exit(1)
+          }
           const walk = dir => {
             let n = 0
             for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
               const p = `${dir}/${e.name}`
-              n += e.isDirectory() ? walk(p) : selected(p) ? 1 : 0
+              n += e.isDirectory() ? walk(p) : kept(p) ? 1 : 0
             }
             return n
           }
-          // content/english/_index.md is the home page - a file at the root
-          // rather than a directory, and no ignoreFiles prefix can exclude it,
-          // so it is counted apart from the directories it would otherwise mask.
+          // A tree's own _index.md is the home page - a file at the root rather
+          // than a directory, and no ignoreFiles prefix can exclude it, so it is
+          // counted apart from the directories it would otherwise mask.
           let inDirs = 0
           let atRoot = 0
           const per = {}
-          for (const d of fs.readdirSync(root, { withFileTypes: true })) {
-            if (!d.isDirectory()) { if (selected(`${root}/${d.name}`)) atRoot++; continue }
-            const n = walk(`${root}/${d.name}`)
-            if (n) { per[d.name] = n; inDirs += n }
+          for (const root of roots) {
+            for (const d of fs.readdirSync(root, { withFileTypes: true })) {
+              if (!d.isDirectory()) { if (kept(`${root}/${d.name}`)) atRoot++; continue }
+              const n = walk(`${root}/${d.name}`)
+              if (n) { per[d.name] = (per[d.name] || 0) + n; inDirs += n }
+            }
           }
           if (atRoot) per['(site root)'] = atRoot
           const total = inDirs + atRoot
@@ -291,7 +316,9 @@ jobs:
           say('')
           say(`Renders \`${want.renderSegments.join('`, `')}\`. `
             + `Excluded at load time: ${want.ignoreFiles.length} content `
-            + `directories, ${want.disableLanguages.length} languages. `
+            + `directories, ${want.disableLanguages.length} languages; `
+            + `${enabled.size} language${enabled.size === 1 ? '' : 's'} across `
+            + `${roots.length} content tree${roots.length === 1 ? '' : 's'} remain. `
             + `Predicted peak **${predicted.toLocaleString()} MiB** of `
             + `${runnerMib.toLocaleString()} MiB (${pct}%).`)
           say('')
