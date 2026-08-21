@@ -1,0 +1,256 @@
+name: Redeploy
+run-name: "Redeploy ${{ inputs.groups || 'every group' }} &rarr; ${{ inputs.environment }}"
+
+# Deploys the whole site - every segment, every language - as a few dozen
+# Webgentics runs instead of one per segment. This is the sweep for a change
+# that touches pages no translation wrote: a theme edit, an i18n string, a
+# config change. The hourly translate run already deploys the segments its
+# own translations touch, so nothing here is on a schedule.
+#
+# A group is one Webgentics run carrying one product across every language.
+# Sizing is what decides the boundaries, and it is measured rather than
+# listed: a base name whose English tree holds at least GROUP_MIN_PAGES pages
+# earns a run of its own, anything smaller joins the shared `products` run,
+# and `index` and `home` - the sitemaps, robots and the front pages - always
+# travel together. So `viewer` is one run of 19 languages, each conversion
+# platform is its own, and the eleven products with no format pages are one
+# run between them. A product that grows format pages separates itself the
+# day it crosses the line; none of this file changes.
+#
+# Every page is assumed to exist in every language, because translate.yml is
+# continuously filling that in - sizing against today's partial corpus would
+# plan a fan-out that stops fitting halfway through the year.
+#
+# A group that would not fit one runner is split into language batches until
+# it does. The memory model is webgentics.yml's - that workflow owns it and
+# states it; the two constants are mirrored here only to size the batches,
+# and RUNNER_SHARE keeps a group well inside the ceiling that predictor warns
+# at, because a plan made here is spent on a runner that cannot be asked
+# afterwards how much room was left.
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Build and deploy environment
+        type: environment
+        default: production
+        required: true
+      groups:
+        description: "Comma-separated group names, or empty for every group"
+        required: false
+        default: ""
+        type: string
+      languages:
+        description: "Comma-separated language codes to narrow every group, or empty for every language"
+        required: false
+        default: ""
+        type: string
+      sha_ref:
+        description: Branch, tag or commit SHA of the content repository
+        required: false
+        default: master
+        type: string
+      plan_only:
+        description: "Print the plan and dispatch nothing"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  redeploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # config/ carries the segment definitions and themes/ only has to exist
+      # for the theme module to resolve. blob:none keeps every tree, so the
+      # page counts below come from `git ls-tree` without ever materializing
+      # the twenty-odd thousand content files.
+      - name: Checkout the site configuration
+        uses: actions/checkout@v7
+        with:
+          repository: groupdocs-cloud/products.groupdocs.cloud
+          ref: ${{ inputs.sha_ref }}
+          token: ${{ secrets.REPO_TOKEN }}
+          path: site
+          sparse-checkout: |
+            config
+            themes
+          fetch-depth: 1
+
+      - name: Install Hugo
+        uses: peaceiris/actions-hugo@v3
+        with:
+          extended: true
+
+      - name: Plan the groups
+        run: |
+          set -euo pipefail
+          hugo config --source site --environment "${{ inputs.environment }}" --format json \
+            > "$RUNNER_TEMP/effective.json"
+          git -C site ls-tree -r HEAD --name-only -- content/english > "$RUNNER_TEMP/pages.txt"
+          [ -s "$RUNNER_TEMP/pages.txt" ] || { echo "::error::no content paths at this ref"; exit 1; }
+          python3 - > "$RUNNER_TEMP/plan.tsv" <<'PY'
+          import json, os, re, collections
+
+          GROUP_MIN_PAGES = 100     # english pages before a base earns its own run
+          FLOOR_MIB, KIB_PER_PAGE, RUNNER_SHARE = 350, 160, 0.65
+
+          tmp = os.environ["RUNNER_TEMP"]
+          cfg = json.load(open(f"{tmp}/effective.json"))
+          segments = cfg["segments"]
+          default_language = cfg["defaultcontentlanguage"]
+          languages = sorted(cfg["languages"])
+          wanted_groups = {g.strip() for g in os.environ.get("ONLY_GROUPS", "").split(",") if g.strip()}
+          wanted_langs = {l.strip() for l in os.environ.get("ONLY_LANGUAGES", "").split(",") if l.strip()}
+          runner_mib = int(re.search(r"^MemTotal:\s+(\d+)", open("/proc/meminfo").read(), re.M).group(1)) / 1024
+
+          def split_key(key):
+              lang, _, base = key.partition(":")
+              return (lang, base) if base else (default_language, key)
+
+          # The path globs a base claims. Every language states the same ones,
+          # so the first key that names a base settles it.
+          claims = {}
+          for key, segment in segments.items():
+              base = split_key(key)[1]
+              if base in claims:
+                  continue
+              claims[base] = [
+                  alt.strip()
+                  for include in segment.get("includes", [])
+                  for alt in (include.get("path") or "").strip("{}").split(",")
+                  if alt.strip()
+              ]
+
+          subtrees, exacts = {}, {}
+          for base, paths in claims.items():
+              for path in paths:
+                  if path.endswith("/**"):
+                      subtrees[path[1:-3].rstrip("/")] = base
+                  elif path == "/":
+                      exacts[""] = base
+                  else:
+                      exacts[path[1:].rstrip("/")] = base
+
+          # A page belongs to the deepest subtree that claims it, so
+          # /conversion/net wins over /conversion for a page under both.
+          pages = collections.Counter()
+          for line in open(f"{tmp}/pages.txt"):
+              relative = line.strip()[len("content/english/"):]
+              if not relative.endswith(".md"):
+                  continue
+              claimed, depth = None, -1
+              for prefix, base in subtrees.items():
+                  if relative.startswith(prefix + "/") and len(prefix) > depth:
+                      claimed, depth = base, len(prefix)
+              if claimed is None:
+                  for exact, base in exacts.items():
+                      if relative == (f"{exact}/_index.md" if exact else "_index.md"):
+                          claimed = base
+                          break
+              if claimed:
+                  pages[claimed] += 1
+
+          groups = collections.defaultdict(list)
+          for base in claims:
+              if base in ("index", "home"):
+                  groups["home"].append(base)
+              elif pages[base] >= GROUP_MIN_PAGES:
+                  groups[base].append(base)
+              else:
+                  groups["products"].append(base)
+
+          def predicted(page_count):
+              return round(FLOOR_MIB + page_count * KIB_PER_PAGE / 1024)
+
+          # Every english page is assumed present in every language.
+          budget = max(1, int((runner_mib * RUNNER_SHARE - FLOOR_MIB) * 1024 / KIB_PER_PAGE))
+          plan = []
+          for group, bases in sorted(groups.items(), key=lambda kv: -sum(pages[b] for b in kv[1])):
+              if wanted_groups and group not in wanted_groups:
+                  continue
+              english = sum(pages[b] for b in bases) or 1
+              members = collections.defaultdict(list)
+              for key in segments:
+                  language, base = split_key(key)
+                  if base in bases and (not wanted_langs or language in wanted_langs):
+                      members[language].append(key)
+              if not members:
+                  continue
+              per_batch = max(1, budget // english)
+              batch_languages = sorted(members)
+              batches = [batch_languages[i:i + per_batch] for i in range(0, len(batch_languages), per_batch)]
+              for number, batch in enumerate(batches, 1):
+                  names = sorted(k for language in batch for k in members[language])
+                  label = group if len(batches) == 1 else f"{group}-{number}of{len(batches)}"
+                  total = english * len(batch)
+                  print(f"{label}\t{','.join(names)}\t{len(names)}\t{total}\t{predicted(total)}")
+          PY
+          [ -s "$RUNNER_TEMP/plan.tsv" ] || { echo "::error::no group matched"; exit 1; }
+          {
+            echo "## Redeploy plan &middot; ${{ inputs.environment }}"
+            echo
+            echo "| Group | Segments | Pages | Predicted peak |"
+            echo "| :--- | ---: | ---: | ---: |"
+            awk -F'\t' '{ printf "| `%s` | %s | %s | %s MiB |\n", $1, $3, $4, $5 }' "$RUNNER_TEMP/plan.tsv"
+            echo
+            echo "$(wc -l < "$RUNNER_TEMP/plan.tsv") groups, $(awk -F'\t' '{n += $3} END {print n}' "$RUNNER_TEMP/plan.tsv") segments."
+            echo
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+        env:
+          # Not GROUPS: bash owns that name - it holds the caller's group ids,
+          # so an inherited value never reaches the script and the filter
+          # would silently select everything.
+          ONLY_GROUPS: ${{ inputs.groups }}
+          ONLY_LANGUAGES: ${{ inputs.languages }}
+
+      # Each group's run succeeds or fails on its own in the Webgentics
+      # workflow's history; this job only guarantees the dispatches were
+      # accepted. A failed dispatch is fatal here, unlike the per-run failure
+      # a translate deploy shrugs off, because nothing else will retry a
+      # sweep: the group simply would not ship.
+      - name: Dispatch one deploy per group
+        if: ${{ !inputs.plan_only }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          failed=0
+          {
+            echo "## Dispatches"
+            echo
+            echo "| Group | Operation | Result |"
+            echo "| :--- | :--- | :--- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          while IFS=$'\t' read -r group segments count pages peak; do
+            op="redeploy-${group}-${GITHUB_RUN_NUMBER}"
+            ok=""
+            for attempt in 1 2 3; do
+              code=$(curl -s -o "$RUNNER_TEMP/resp.txt" -w '%{http_code}' --max-time 30 \
+                -X POST \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/webgentics.yml/dispatches" \
+                -d "$(jq -nc --arg op "$op" --arg seg "$segments" --arg env "${{ inputs.environment }}" \
+                       --arg ref "${{ inputs.sha_ref }}" \
+                       '{ref: "master", inputs: {operation_id: $op, operation_kind: "connector.deploy",
+                          sha_ref: $ref, website_id: "products.groupdocs.cloud",
+                          environment: $env, segments: $seg}}')" \
+                || echo 000)
+              if [ "$code" = "204" ]; then ok=yes; break; fi
+              sleep $(( attempt * 5 ))
+            done
+            if [ -n "$ok" ]; then
+              echo "| \`$group\` | \`$op\` | queued |" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "| \`$group\` | \`$op\` | **failed ($code)** |" >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::dispatch failed for $group (HTTP $code): $(head -c 200 "$RUNNER_TEMP/resp.txt")"
+              failed=$(( failed + 1 ))
+            fi
+          done < "$RUNNER_TEMP/plan.tsv"
+          [ "$failed" -eq 0 ]
