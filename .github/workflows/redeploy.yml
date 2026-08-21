@@ -1,11 +1,8 @@
 name: Redeploy
-run-name: "Redeploy ${{ inputs.groups || 'every group' }} &rarr; ${{ inputs.environment }}"
+run-name: "Redeploy products.groupdocs.cloud → ${{ inputs.environment }}"
 
 # Deploys the whole site by dispatching the Webgentics workflow once per
 # group instead of once per segment: twenty runs for all 476 segments.
-# This is the sweep for a change no translation writes - a theme edit, an
-# i18n string, a config change. The hourly translate run already deploys
-# the segments its own translations touch, so nothing here is scheduled.
 #
 # Group sizes are what the list is arranged around, counted against every
 # english page existing in every language, since translate.yml is filling
@@ -24,11 +21,6 @@ on:
         type: environment
         default: production
         required: true
-      groups:
-        description: "Space-separated group names, or empty for every group"
-        required: false
-        default: ""
-        type: string
       sha_ref:
         description: Branch, tag or commit SHA of the content repository
         required: false
@@ -46,7 +38,6 @@ jobs:
       - name: Dispatch one deploy per group
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ONLY: ${{ inputs.groups }}
         run: |
           set -euo pipefail
           failed=0
@@ -59,7 +50,6 @@ jobs:
 
           while read -r group segments; do
             [ -n "$group" ] || continue
-            case "${ONLY:-}" in "") ;; *" $group "*|"$group "*|*" $group"|"$group") ;; *) continue ;; esac
 
             op="redeploy-${group}-${GITHUB_RUN_NUMBER}"
             ok=""
