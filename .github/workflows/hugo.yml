@@ -66,10 +66,10 @@ jobs:
         with:
           node-version: 18
 
-      #- name: Setup Hugo
-      #  uses: peaceiris/actions-hugo@v2
-      #  with:
-      #    extended: true
+      - name: Setup Hugo
+        uses: peaceiris/actions-hugo@v3
+        with:
+          extended: true
 
       - name: Install Node.js Dependencies
         run: npm install
@@ -83,23 +83,21 @@ jobs:
         run: npm run pages
 
       - name: Build
-        run: ./node_modules/hugo-bin/vendor/hugo --environment=${{ github.event.inputs.environment }}
+        run: hugo --environment=${{ github.event.inputs.environment }}
 
       - name: Process Sitemaps
         run: npm run sitemaps
 
       - name: Deploy to ${{ github.event.inputs.environment }}
-        run: ./node_modules/hugo-bin/vendor/hugo deploy --environment=${{ github.event.inputs.environment }} --maxDeletes=0
+        run: hugo deploy --environment=${{ github.event.inputs.environment }} --maxDeletes=0
 
       - name: Invalidate cache
         env:
           ENVIRONMENT: ${{ github.event.inputs.environment }}
           API_ENDPOINT: ${{ secrets.CACHE_INVALIDATION_API_ENDPOINT }}
         run: |
-          BASE_URL="https://products-qa.groupdocs.cloud"
-          if [ "$ENVIRONMENT" = "production" ]; then
-            BASE_URL="https://products.groupdocs.cloud"
-          fi
+          BASE_URL=$(hugo config --environment "$ENVIRONMENT" --format json 2>/dev/null \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["baseurl"].rstrip("/"))')
 
           URL="$BASE_URL/*"
       

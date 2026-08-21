@@ -48,7 +48,9 @@ jobs:
           repository: groupdocs-cloud/products.groupdocs.cloud
           ref: ${{ github.event.inputs.branch }}
           token: ${{ secrets.REPO_TOKEN }}
-      - run: brew install hugo
+      - uses: peaceiris/actions-hugo@v3
+        with:
+          extended: true
       - uses: actions/setup-node@v4
       - run: npm install
       - run: npm run configure
@@ -62,11 +64,9 @@ jobs:
           LANGUAGE: ${{ matrix.configure_one_language }}
           API_ENDPOINT: ${{ secrets.CACHE_INVALIDATION_API_ENDPOINT }}
         run: |
-          BASE_URL="https://products-qa.groupdocs.cloud"
-          if [ "$ENVIRONMENT" = "production" ]; then
-            BASE_URL="https://products.groupdocs.cloud"
-          fi
-      
+          BASE_URL=$(hugo config --environment "$ENVIRONMENT" --format json 2>/dev/null \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["baseurl"].rstrip("/"))')
+
           if [ "$LANGUAGE" = "en" ]; then
             URL="$BASE_URL/$PRODUCT/*"
           else

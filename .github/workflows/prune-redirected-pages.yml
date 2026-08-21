@@ -33,8 +33,6 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_ENDPOINT_URL: ${{ secrets.AWS_ENDPOINT_URL }}
       AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
-      BUCKET: products.groupdocs.cloud
-      SITE: https://products.groupdocs.cloud
       MAX_DELETES: ${{ inputs.max_deletes || '2000' }}
 
     steps:
@@ -46,6 +44,29 @@ jobs:
           token: ${{ secrets.REPO_TOKEN }}
           path: site
           fetch-depth: 1
+
+      - name: Install Hugo
+        uses: peaceiris/actions-hugo@v3
+        with:
+          extended: true
+
+      # The site URL and the bucket are the target environment's baseURL and
+      # deploy target, read from the effective Hugo config rather than kept
+      # here as copies that could drift.
+      - name: Resolve the site and bucket
+        env:
+          ENVIRONMENT: ${{ inputs.environment || 'production' }}
+        run: |
+          set -euo pipefail
+          hugo config --source site --environment "$ENVIRONMENT" --format json \
+            > "$RUNNER_TEMP/effective.json"
+          python3 - >> "$GITHUB_ENV" <<'PY'
+          import json, os
+          from urllib.parse import urlparse
+          cfg = json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "effective.json")))
+          print("SITE=" + cfg["baseurl"].rstrip("/"))
+          print("BUCKET=" + urlparse(cfg["deployment"]["targets"][0]["url"]).netloc)
+          PY
 
       # Both rule shapes the file carries: the generated capture-group form
       # (one rule, English + 18 locale prefixes) and the historical literal

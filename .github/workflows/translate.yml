@@ -12,9 +12,9 @@ on:
         default: ""
         type: string
       languages:
-        description: "Comma-separated target language codes"
+        description: "Comma-separated target language codes, or empty for every site language"
         required: false
-        default: "ru,es,pt,id,fr,it,fa,ja,de,zh,he,ar,vi,th,el,ko,tr,da"
+        default: ""
         type: string
       max-files:
         description: "Files one product may process (skips count toward it)"
@@ -81,6 +81,32 @@ jobs:
         id: base
         working-directory: site
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Hugo
+        uses: peaceiris/actions-hugo@v3
+        with:
+          extended: true
+
+      # The default target list is the site's own roster: the effective Hugo
+      # config's languages minus the default content language, so a language
+      # added to the site starts translating without a workflow edit.
+      - name: Resolve the target languages
+        id: languages
+        env:
+          REQUESTED: ${{ inputs.languages || '' }}
+        run: |
+          set -euo pipefail
+          if [ -n "$REQUESTED" ]; then
+            echo "list=$REQUESTED" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          hugo config --source site --format json > "$RUNNER_TEMP/effective.json"
+          python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          import json, os
+          cfg = json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "effective.json")))
+          langs = sorted(set(cfg["languages"]) - {cfg["defaultcontentlanguage"]})
+          print("list=" + ",".join(langs))
+          PY
 
       # Four products a run, not a sliver of every product: with fifteen
       # slices the share was shorter than the pages it opened, so slice ends
@@ -210,7 +236,7 @@ jobs:
         env:
           BUDGET_MINUTES: ${{ inputs.budget-minutes || '42' }}
           PRODUCTS_INPUT: ${{ inputs.products || '' }}
-          LANGUAGES: ${{ inputs.languages || 'ru,es,pt,id,fr,it,fa,ja,de,zh,he,ar,vi,th,el,ko,tr,da' }}
+          LANGUAGES: ${{ steps.languages.outputs.list }}
           MAX_FILES: ${{ inputs.max-files || '100000' }}
           ENVIRONMENT: ${{ inputs.environment || 'production' }}
           TRANSLAGENT_MAX_CONCURRENCY: "128"

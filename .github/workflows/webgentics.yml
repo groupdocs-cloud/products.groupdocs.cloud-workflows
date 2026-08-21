@@ -8,10 +8,10 @@ run-name: "Webgentics-Operation: ${{ inputs.operation_id }}"
 # nothing here.
 #
 # Segments are defined in the content repository, in Hugo's own
-# config/_default/segments.yaml. That file is the single definition: this
-# workflow reads it at the checked-out ref, and so does any caller deciding
-# which segment a changed page belongs to. Same file, same commit - there is
-# no second copy to drift.
+# config/_default/segments.yaml. Hugo is the single reader: this workflow
+# takes the definitions from the effective config (`hugo config`) at the
+# checked-out ref, so what it resolves is exactly what the build resolves -
+# there is no second copy to drift.
 #
 #   segments: conversion-net              one segment
 #   segments: conversion-net,viewer       two segments in one run
@@ -130,56 +130,6 @@ jobs:
 
       - run: npm install --no-audit --no-fund
 
-      # Empty segments means the whole site: every segment defined at the
-      # checked-out commit, resolved here into the same comma-separated shape
-      # a dispatch would carry.
-      - name: Resolve the segment list
-        id: segments
-        env:
-          REQUESTED: ${{ inputs.segments }}
-        run: |
-          set -euo pipefail
-          if [ -n "$REQUESTED" ]; then
-            {
-              echo 'segments<<SEGMENTS'
-              echo "$REQUESTED"
-              echo 'SEGMENTS'
-            } >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          node - <<'NODE'
-          const fs = require('fs')
-          const yaml = require('js-yaml')
-          const file = 'config/_default/segments.yaml'
-          if (!fs.existsSync(file)) {
-            console.log(`::error::${file} is missing at the requested ref`)
-            process.exit(1)
-          }
-          let defined
-          try {
-            defined = yaml.load(fs.readFileSync(file, 'utf8'))
-          } catch (e) {
-            console.log(`::error::${file} does not parse: ${e.message}`)
-            process.exit(1)
-          }
-          const names = defined && typeof defined === 'object' && !Array.isArray(defined)
-            ? Object.keys(defined) : []
-          if (!names.length) {
-            console.log(`::error::${file} defines no segments`)
-            process.exit(1)
-          }
-          const broken = names.filter(n => n.includes(',') || n.includes('\n'))
-          if (broken.length) {
-            console.log(`::error::segment names cannot join a comma-separated list: ${broken.join(' ')}`)
-            process.exit(1)
-          }
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `segments=${names.join(',')}\n`)
-          const note = `Resolved every segment: ${names.length} defined at this commit.`
-          console.log(note)
-          const summary = process.env.GITHUB_STEP_SUMMARY
-          if (summary) fs.appendFileSync(summary, note + '\n\n')
-          NODE
-
       # `hugo deploy` ships only in the withdeploy builds; the common setup
       # actions install plain extended, and the deploy then fails after the
       # whole build has run. Assert it up front instead.
@@ -195,6 +145,45 @@ jobs:
           hugo version
           hugo deploy --help >/dev/null 2>&1 \
             || { echo "::error::installed Hugo has no deploy support"; exit 1; }
+
+      # Empty segments means the whole site: every segment defined at the
+      # checked-out commit, resolved here into the same comma-separated shape
+      # a dispatch would carry. The names come from the effective config, the
+      # same resolution the build below sees.
+      - name: Resolve the segment list
+        id: segments
+        env:
+          REQUESTED: ${{ inputs.segments }}
+        run: |
+          set -euo pipefail
+          if [ -n "$REQUESTED" ]; then
+            {
+              echo 'segments<<SEGMENTS'
+              echo "$REQUESTED"
+              echo 'SEGMENTS'
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          hugo config --format json > "$RUNNER_TEMP/effective.json"
+          node - <<'NODE'
+          const fs = require('fs')
+          const cfg = require(`${process.env.RUNNER_TEMP}/effective.json`)
+          const names = Object.keys(cfg.segments || {})
+          if (!names.length) {
+            console.log('::error::the effective config defines no segments')
+            process.exit(1)
+          }
+          const broken = names.filter(n => n.includes(',') || n.includes('\n'))
+          if (broken.length) {
+            console.log(`::error::segment names cannot join a comma-separated list: ${broken.join(' ')}`)
+            process.exit(1)
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `segments=${names.join(',')}\n`)
+          const note = `Resolved every segment: ${names.length} defined at this commit.`
+          console.log(note)
+          const summary = process.env.GITHUB_STEP_SUMMARY
+          if (summary) fs.appendFileSync(summary, note + '\n\n')
+          NODE
 
       - name: Install GNU time
         run: command -v /usr/bin/time >/dev/null || sudo apt-get install -y -qq time
@@ -223,20 +212,16 @@ jobs:
       - name: Verify the slice took effect
         run: |
           set -euo pipefail
-          hugo config > "$RUNNER_TEMP/effective.txt" 2>/dev/null
+          hugo config --format json > "$RUNNER_TEMP/effective.json"
           node - <<'NODE'
           const fs = require('fs')
           const summary = process.env.GITHUB_STEP_SUMMARY
           const say = s => { console.log(s); if (summary) fs.appendFileSync(summary, s + '\n') }
           const want = JSON.parse(fs.readFileSync('hugo.json', 'utf8'))
-          const eff = fs.readFileSync(process.env.RUNNER_TEMP + '/effective.txt', 'utf8')
-          const list = key => {
-            const m = eff.match(new RegExp('^' + key + " = \\[([^\\]]*)\\]", 'mi'))
-            return m ? (m[1].match(/'([^']*)'/g) || []).map(s => s.slice(1, -1)) : []
-          }
+          const eff = require(`${process.env.RUNNER_TEMP}/effective.json`)
           let bad = false
           const cmp = (key, expected) => {
-            const got = list(key)
+            const got = eff[key] || []
             if (JSON.stringify([...got].sort()) !== JSON.stringify([...expected].sort())) {
               console.log(`::error::${key} was overridden by config/_default - wanted ${
                 expected.length} entries, Hugo resolved ${got.length}`)
@@ -347,11 +332,8 @@ jobs:
         run: |
           set -euo pipefail
           TARGET=$(node -e '
-            const fs=require("fs"), yaml=require("js-yaml");
-            const f="config/production/deployment.yaml";
-            try { process.stdout.write(yaml.load(fs.readFileSync(f,"utf8")).targets[0].url) }
-            catch (e) { process.stdout.write("(no target configured)") }
-          ')
+            const t = (require(`${process.env.RUNNER_TEMP}/effective.json`).deployment || {}).targets || [];
+            process.stdout.write(t.length ? t[0].url : "(no target configured)")')
           {
             echo "## Upload"
             echo
@@ -369,9 +351,8 @@ jobs:
       # slice purges /fr/viewer/* and nothing else - no all-locales pattern is
       # needed here, unlike product.hugo.yml, which does not know its language.
       #
-      # One wildcard URL per POST as {"website": "<url>"} is the shape that
-      # workflow established. Its own two calls never ran: an unterminated quote
-      # on the first swallowed the second, so nothing was ever purged there.
+      # One wildcard URL per POST as {"website": "<url>"} is the shape the
+      # invalidation API takes.
       #
       # A failed purge leaves the CDN serving the previous page for up to its
       # 30-day max-age, which is why it fails the job even though the upload
@@ -382,13 +363,15 @@ jobs:
       - name: Invalidate cache
         env:
           API_ENDPOINT: ${{ secrets.CACHE_INVALIDATION_API_ENDPOINT }}
-          BASE_URL: https://products.groupdocs.cloud
         run: |
           set -euo pipefail
           if [ -z "${API_ENDPOINT:-}" ]; then
             echo "::error::CACHE_INVALIDATION_API_ENDPOINT is not set"
             exit 1
           fi
+          BASE_URL=$(node -e '
+            const base = require(`${process.env.RUNNER_TEMP}/effective.json`).baseurl;
+            process.stdout.write(base.replace(/\/$/, ""))')
 
           TABLE="$RUNNER_TEMP/purge.md"
           : > "$TABLE"
