@@ -22,7 +22,7 @@ on:
         default: "100000"
         type: string
       budget-minutes:
-        description: "Minutes of translating before the run stops itself and pushes"
+        description: "Minutes of translating before a slot stops itself and pushes"
         required: false
         default: "42"
         type: string
@@ -43,10 +43,17 @@ permissions:
   actions: write
 
 jobs:
-  translate:
-    name: Translate
+  # What a run will translate, decided once so the slots below cannot each
+  # reach a different answer, and so the deploy at the end has one pre-run
+  # commit to diff against.
+  plan:
+    name: Plan
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 10
+    outputs:
+      slots: ${{ steps.slots.outputs.list }}
+      languages: ${{ steps.languages.outputs.list }}
+      base: ${{ steps.base.outputs.sha }}
 
     steps:
       - name: Checkout site
@@ -55,27 +62,9 @@ jobs:
           repository: groupdocs-cloud/products.groupdocs.cloud
           token: ${{ secrets.REPO_TOKEN }}
           path: site
-          # Full history: translagent judges freshness by last-commit times.
-          fetch-depth: 0
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.REPO_TOKEN }}
-
-      - name: Pull translagent
-        run: docker pull ghcr.io/agentization/translagent:latest
-
-      - name: Configure git identity
-        working-directory: site
-        env:
-          GIT_AUTHOR_NAME: ${{ secrets.GIT_AUTHOR_NAME }}
-          GIT_AUTHOR_EMAIL: ${{ secrets.GIT_AUTHOR_EMAIL }}
-        run: |
-          git config user.name "$GIT_AUTHOR_NAME"
-          git config user.email "$GIT_AUTHOR_EMAIL"
+          # Only the tree and the config are read here; history is what the
+          # translating jobs need.
+          fetch-depth: 1
 
       - name: Record the pre-run head
         id: base
@@ -89,10 +78,7 @@ jobs:
 
       # The default target list is the site's own roster: the effective Hugo
       # config's languages minus the default content language, so a language
-      # added to the site starts translating without a workflow edit. The
-      # order is search demand, because a run that ends on its budget has
-      # translated a prefix of it, and the page-major walk spends that prefix
-      # on every page it reaches.
+      # added to the site starts translating without a workflow edit.
       - name: Resolve the target languages
         id: languages
         env:
@@ -121,10 +107,9 @@ jobs:
           print("list=" + ",".join(order))
           PY
 
-      # Four slots a run, not a sliver of every product: with fifteen slices
-      # the share was shorter than the pages it opened, so slice ends
-      # abandoned whatever was in flight and runs spent themselves re-walking
-      # skip prefixes.
+      # Four slots a run, not a sliver of every product: a share shorter than
+      # the pages it opens ends with whatever was in flight abandoned, and the
+      # run spends itself re-walking skip prefixes.
       #
       # What fills the four follows the demand, and demand inside a product is
       # as lopsided as demand between products. Impressions per subtree,
@@ -134,26 +119,19 @@ jobs:
       # slots rotate by run number through the platforms of conversion and
       # viewer, the two products that carry 92% of impressions between them,
       # and the fourth rotates through every other product. Three quarters of
-      # a run's budget therefore lands on that 92%, against half of it when
-      # the slots were whole products.
+      # a run therefore lands on that 92%, against half of it when the slots
+      # were whole products.
       #
       # Nothing starves: each rotation advances a slot per run, so a platform
-      # comes up within a day and a tail product within a fortnight. A slot
-      # that finishes inside its slice hands what is left to the ones after
-      # it, which is what a finished anchor costs once the reuse pass has
-      # nothing to send.
-      - name: Translate
+      # comes up within a day and a tail product within a fortnight.
+      - name: Choose the slots
+        id: slots
+        env:
+          PRODUCTS_INPUT: ${{ inputs.products || '' }}
         run: |
-          set -u
-          DEADLINE=$(( $(date +%s) + BUDGET_MINUTES * 60 ))
-          REACHED=0
-          FAILED=0
-
-          if [ -n "$PRODUCTS_INPUT" ]; then
-            PRODUCTS=$(echo "$PRODUCTS_INPUT" | tr ',' '\n' | sed '/^$/d')
-          else
-            PRODUCTS=$(python3 - <<'PY'
-          import os, pathlib
+          set -euo pipefail
+          python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          import json, os, pathlib, sys
 
           ROOT = pathlib.Path("site/content/english")
           RUN = int(os.environ.get("GITHUB_RUN_NUMBER", "0"))
@@ -172,110 +150,152 @@ jobs:
           def turn(names):
               return [names[RUN % len(names)]] if names else []
 
-          conversion = ladder("conversion", "net curl php android python go ruby java nodejs".split())
-          viewer = ladder("viewer", "net php curl python java nodejs go".split(), skip={"android"})
-          rest = ladder(".", "parser metadata translation signature editor merger rewriter"
-                             " comparison assembly annotation watermark classification total".split(),
-                        skip={"conversion", "viewer"})
+          requested = [p.strip() for p in os.environ["PRODUCTS_INPUT"].split(",") if p.strip()]
+          if requested:
+              slots = requested
+          else:
+              conversion = ladder("conversion", "net curl php android python go ruby java nodejs".split())
+              viewer = ladder("viewer", "net php curl python java nodejs go".split(), skip={"android"})
+              rest = ladder(".", "parser metadata translation signature editor merger rewriter"
+                                 " comparison assembly annotation watermark classification total".split(),
+                            skip={"conversion", "viewer"})
+              slots = [ANCHOR]
+              slots += [f"conversion/{n}" for n in turn(conversion)]
+              slots += [f"viewer/{n}" for n in turn(viewer)]
+              slots += turn(rest)
 
-          slots = [ANCHOR]
-          slots += [f"conversion/{n}" for n in turn(conversion)]
-          slots += [f"viewer/{n}" for n in turn(viewer)]
-          slots += turn(rest)
-          print("\n".join(s for s in slots if (ROOT / s).is_dir()))
+          slots = [s for s in slots if (ROOT / s).is_dir()]
+          if not slots:
+              raise SystemExit("::error::no slot to translate: none of the named paths exists")
+          print("slots: " + " ".join(slots), file=sys.stderr)
+          print("list=" + json.dumps(slots))
           PY
-            )
-          fi
-          TOTAL=$(echo "$PRODUCTS" | wc -l)
-          echo "order: $(echo $PRODUCTS | tr '\n' ' ')"
 
-          INDEX=0
-          for product in $PRODUCTS; do
-            INDEX=$(( INDEX + 1 ))
-            remaining=$(( DEADLINE - $(date +%s) ))
-            if [ "$remaining" -le 60 ]; then
-              echo "budget spent before $product"
-              break
-            fi
-            # An equal share of what is left, recomputed each time, so the
-            # products that finish early enlarge the shares of those after.
-            SLICE=$(( remaining / (TOTAL - INDEX + 1) ))
-            [ "$SLICE" -lt 60 ] && SLICE=60
-            STOP=$(( $(date +%s) + SLICE ))
-            [ "$STOP" -gt "$DEADLINE" ] && STOP=$DEADLINE
-            if [ ! -d "site/content/english/$product" ]; then
-              echo "::warning::no such product: $product"
-              continue
-            fi
+  # One job per slot, each with the whole budget. The slots used to share one
+  # job and divide the wall clock between them; run side by side they each get
+  # all of it, which is the throughput this deployment is short of.
+  #
+  # Four processes against one endpoint need nothing between them. Each reads
+  # the queue all of them are building as its own latency, and independent
+  # AIMD controllers on a shared congestion signal converge to an equal share
+  # of the bottleneck, so the fleet saturates without any one of them choking
+  # it; a burst of refusals costs each of them one halving and a cool-down.
+  # The token bucket is not what governs this - one process measured 44 pages
+  # an hour at some 20 requests a minute against a 1200 ceiling, so latency is
+  # the binding constraint and the controller is what reads it. max-parallel
+  # bounds what a hand-dispatched list of twenty products can aim at the
+  # endpoint at once.
+  translate:
+    name: ${{ matrix.slot }}
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        slot: ${{ fromJSON(needs.plan.outputs.slots) }}
 
-            # A product may name a subtree - `viewer/android` is how a run is
-            # pointed at the pages that carry the demand, which is where this
-            # tool takes its priority from. Docker rejects a slash in a
-            # container name, and the product a report is filed under is the
-            # top of the path either way.
-            CONTAINER_NAME="translagent-${GITHUB_RUN_ID}-$(echo "$product" | tr '/' '-')"
-            PRODUCT_OFFICIAL="GroupDocs.$(echo "${product%%/*}" | sed 's/./\U&/')"
-            export OTEL_RESOURCE_ATTRIBUTES="service.namespace=$GIT_AUTHOR_NAME,deployment.environment.name=$ENVIRONMENT,deployment.environment=$ENVIRONMENT,aspose.agent.report=true,aspose.agent.product=$PRODUCT_OFFICIAL,aspose.agent.item=Product Pages,aspose.agent.job=Translation,aspose.agent.website=groupdocs.cloud,aspose.agent.website_section=Product Pages"
+    steps:
+      - name: Checkout site
+        uses: actions/checkout@v7
+        with:
+          repository: groupdocs-cloud/products.groupdocs.cloud
+          token: ${{ secrets.REPO_TOKEN }}
+          path: site
+          # Full history: translagent judges freshness by last-commit times,
+          # and pairs a translation with the English of the commit that wrote
+          # it to decide what it can keep.
+          fetch-depth: 0
 
-            echo "::group::$product (${SLICE}s slice of ${remaining}s left)"
-            docker run --rm \
-              --name "$CONTAINER_NAME" \
-              --user "$(id -u):$(id -g)" \
-              -v "${{ github.workspace }}/site:/app" \
-              -e OPENAI_API_KEY \
-              -e OPENAI_BASE_URL \
-              -e TRANSLATION_MODEL \
-              -e OTEL_EXPORTER_OTLP_ENDPOINT \
-              -e OTEL_EXPORTER_OTLP_HEADERS \
-              -e OTEL_SERVICE_NAME \
-              -e OTEL_RESOURCE_ATTRIBUTES \
-              -e TRANSLAGENT_MAX_CONCURRENCY \
-              -e GIT_AUTHOR_NAME \
-              -e GIT_AUTHOR_EMAIL \
-              ghcr.io/agentization/translagent:latest \
-              --project-dir /app \
-              --content-dir "content/english/$product" \
-              --output-dir "translated-content/$product" \
-              --max-files "$MAX_FILES" \
-              --requests-per-minute "1200" \
-              --target-language "$LANGUAGES" \
-              >> translated.txt 2>> run.log &
-            TRANSLATE_PID=$!
-            # Cancellation and the budget both reach translagent via docker
-            # stop; it commits finished work before exiting.
-            trap 'docker stop -t 55 "$CONTAINER_NAME" >/dev/null 2>&1 || true' INT TERM
-            while kill -0 "$TRANSLATE_PID" 2>/dev/null; do
-              if [ "$(date +%s)" -ge "$STOP" ]; then
-                echo "slice spent: stopping $product"
-                docker stop -t 55 "$CONTAINER_NAME" >/dev/null 2>&1 || true
-                break
-              fi
-              sleep 5
-            done
-            wait "$TRANSLATE_PID"
-            STATUS=$?
-            REACHED=$(( REACHED + 1 ))
-            if [ "$STATUS" -ne 0 ] && [ "$STATUS" -le 128 ]; then
-              echo "::warning::$product exited $STATUS"
-              FAILED=$(( FAILED + 1 ))
-            fi
-            echo "::endgroup::"
-          done
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.REPO_TOKEN }}
 
-          if [ "$REACHED" -eq 0 ]; then
-            echo "::error::no product was run: none of [$PRODUCTS] exists"
+      - name: Pull translagent
+        run: docker pull ghcr.io/agentization/translagent:latest
+
+      - name: Configure git identity
+        working-directory: site
+        env:
+          GIT_AUTHOR_NAME: ${{ secrets.GIT_AUTHOR_NAME }}
+          GIT_AUTHOR_EMAIL: ${{ secrets.GIT_AUTHOR_EMAIL }}
+        run: |
+          git config user.name "$GIT_AUTHOR_NAME"
+          git config user.email "$GIT_AUTHOR_EMAIL"
+
+      # Docker rejects a slash in a container name and an artifact rejects one
+      # in its own, so the slot gets a flat spelling once, here.
+      - name: Name this slot
+        env:
+          SLOT: ${{ matrix.slot }}
+        run: echo "SLOT_SLUG=$(echo "$SLOT" | tr '/' '-')" >> "$GITHUB_ENV"
+
+      - name: Translate
+        run: |
+          set -u
+          STOP=$(( $(date +%s) + BUDGET_MINUTES * 60 ))
+
+          if [ ! -d "site/content/english/$SLOT" ]; then
+            echo "::error::no such product: $SLOT"
             exit 1
           fi
-          # One product failing is that product's content; every product this
-          # run reached failing is the endpoint, the image or the credentials.
-          if [ "$FAILED" -eq "$REACHED" ]; then
-            echo "::error::every product this run reached failed"
+
+          # The product a report is filed under is the top of the path, which
+          # is what a slot naming a subtree still shares with its siblings.
+          PRODUCT_OFFICIAL="GroupDocs.$(echo "${SLOT%%/*}" | sed 's/./\U&/')"
+          CONTAINER_NAME="translagent-${GITHUB_RUN_ID}-${SLOT_SLUG}"
+          export OTEL_RESOURCE_ATTRIBUTES="service.namespace=$GIT_AUTHOR_NAME,deployment.environment.name=$ENVIRONMENT,deployment.environment=$ENVIRONMENT,aspose.agent.report=true,aspose.agent.product=$PRODUCT_OFFICIAL,aspose.agent.item=Product Pages,aspose.agent.job=Translation,aspose.agent.website=groupdocs.cloud,aspose.agent.website_section=Product Pages"
+
+          docker run --rm \
+            --name "$CONTAINER_NAME" \
+            --user "$(id -u):$(id -g)" \
+            -v "${{ github.workspace }}/site:/app" \
+            -e OPENAI_API_KEY \
+            -e OPENAI_BASE_URL \
+            -e TRANSLATION_MODEL \
+            -e OTEL_EXPORTER_OTLP_ENDPOINT \
+            -e OTEL_EXPORTER_OTLP_HEADERS \
+            -e OTEL_SERVICE_NAME \
+            -e OTEL_RESOURCE_ATTRIBUTES \
+            -e TRANSLAGENT_MAX_CONCURRENCY \
+            -e GIT_AUTHOR_NAME \
+            -e GIT_AUTHOR_EMAIL \
+            ghcr.io/agentization/translagent:latest \
+            --project-dir /app \
+            --content-dir "content/english/$SLOT" \
+            --output-dir "translated-content/$SLOT" \
+            --max-files "$MAX_FILES" \
+            --requests-per-minute "1200" \
+            --target-language "$LANGUAGES" \
+            >> translated.txt 2>> run.log &
+          TRANSLATE_PID=$!
+          # Cancellation and the budget both reach translagent via docker
+          # stop; it commits finished work before exiting.
+          trap 'docker stop -t 55 "$CONTAINER_NAME" >/dev/null 2>&1 || true' INT TERM
+          while kill -0 "$TRANSLATE_PID" 2>/dev/null; do
+            if [ "$(date +%s)" -ge "$STOP" ]; then
+              echo "budget spent: stopping $SLOT"
+              docker stop -t 55 "$CONTAINER_NAME" >/dev/null 2>&1 || true
+              break
+            fi
+            sleep 5
+          done
+          wait "$TRANSLATE_PID"
+          STATUS=$?
+          # Over 128 is the signal this job sent when the budget ran out,
+          # which is how a full slot is meant to end.
+          if [ "$STATUS" -ne 0 ] && [ "$STATUS" -le 128 ]; then
+            echo "::error::$SLOT exited $STATUS"
             exit 1
           fi
         env:
+          SLOT: ${{ matrix.slot }}
           BUDGET_MINUTES: ${{ inputs.budget-minutes || '42' }}
-          PRODUCTS_INPUT: ${{ inputs.products || '' }}
-          LANGUAGES: ${{ steps.languages.outputs.list }}
+          LANGUAGES: ${{ needs.plan.outputs.languages }}
           MAX_FILES: ${{ inputs.max-files || '100000' }}
           ENVIRONMENT: ${{ inputs.environment || 'production' }}
           TRANSLAGENT_MAX_CONCURRENCY: "128"
@@ -300,30 +320,74 @@ jobs:
           fi
 
       # Runs even when the job times out mid-run: batches of 10 are already
-      # committed locally and must not be lost.
+      # committed locally and must not be lost. Slots write disjoint subtrees,
+      # so a rebase onto a sibling's push never conflicts — it only has to be
+      # retried, and four of them landing at once is what needs the attempts.
       - name: Push translations
         if: always()
         working-directory: site
         run: |
-          for attempt in 1 2 3; do
-            git pull --rebase origin master && git push origin HEAD:master && exit 0
-            sleep 10
+          for attempt in 1 2 3 4 5 6; do
+            git pull --rebase -q origin master && git push -q origin HEAD:master && exit 0
+            sleep $(( attempt * 5 ))
           done
           exit 1
+
+      - name: Summary
+        if: always()
+        env:
+          SLOT: ${{ matrix.slot }}
+        run: |
+          {
+            echo "## $SLOT"
+            echo "- translated: $(grep -cE '^Translated: ' translated.txt || echo 0)"
+            echo "- already current: $(grep -cE '^Up to date, skipped: ' translated.txt || echo 0)"
+            echo '```'
+            tail -n 20 translated.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload run log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: run-log-${{ github.run_id }}-${{ env.SLOT_SLUG }}
+          path: |
+            run.log
+            translated.txt
+          retention-days: 14
+
+  # One dispatch pass for the whole run, after every slot has pushed. Per slot
+  # it would send overlapping segment lists, and a language whose pages came
+  # from two slots would redeploy twice.
+  deploy:
+    name: Deploy
+    needs: [plan, translate]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout site
+        uses: actions/checkout@v7
+        with:
+          repository: groupdocs-cloud/products.groupdocs.cloud
+          token: ${{ secrets.REPO_TOKEN }}
+          path: site
+          fetch-depth: 0
 
       # What landed on master decides what redeploys: every translated file
       # maps to its language's segment, and one Webgentics dispatch per
       # language carries exactly the touched segments, so translations reach
       # the bucket within the hour instead of waiting for a nightly sweep.
-      # Diffing against origin/master deploys only what really pushed, and a
-      # dispatch that fails is a warning - the same segment redeploys with the
-      # next run that lands a translation in it.
+      # Diffing against the head this run planned from deploys only what this
+      # run pushed, and a dispatch that fails is a warning - the same segment
+      # redeploys with the next run that lands a translation in it.
       - name: Deploy the touched segments
-        if: always()
         working-directory: site
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BASE: ${{ steps.base.outputs.sha }}
+          BASE: ${{ needs.plan.outputs.base }}
         run: |
           set -euo pipefail
           git fetch -q origin master
@@ -379,25 +443,3 @@ jobs:
             echo "::error::every deploy dispatch failed"
             exit 1
           fi
-
-      - name: Summary
-        if: always()
-        run: |
-          {
-            echo "## This run"
-            echo "- translated: $(grep -cE '^Translated: ' translated.txt || echo 0)"
-            echo "- already current: $(grep -cE '^Up to date, skipped: ' translated.txt || echo 0)"
-            echo '```'
-            tail -n 20 translated.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY" || true
-
-      - name: Upload run log
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: run-log-${{ github.run_id }}
-          path: |
-            run.log
-            translated.txt
-          retention-days: 14
