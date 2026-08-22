@@ -189,7 +189,6 @@ jobs:
     name: ${{ matrix.slot }}
     needs: plan
     runs-on: ubuntu-latest
-    timeout-minutes: 50
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -275,12 +274,16 @@ jobs:
             >> translated.txt 2>> run.log &
           TRANSLATE_PID=$!
           # Cancellation and the budget both reach translagent via docker
-          # stop; it commits finished work before exiting.
-          trap 'docker stop -t 55 "$CONTAINER_NAME" >/dev/null 2>&1 || true' INT TERM
+          # stop. The budget is soft: the signal stops the run admitting new
+          # pages and it then drains the ones already in flight, which is
+          # minutes of endpoint time it would otherwise throw away. The stop
+          # timeout is what must not cut that short, so it is an hour rather
+          # than the grace period a kill would give.
+          trap 'docker stop -t 3600 "$CONTAINER_NAME" >/dev/null 2>&1 || true' INT TERM
           while kill -0 "$TRANSLATE_PID" 2>/dev/null; do
             if [ "$(date +%s)" -ge "$STOP" ]; then
-              echo "budget spent: stopping $SLOT"
-              docker stop -t 55 "$CONTAINER_NAME" >/dev/null 2>&1 || true
+              echo "budget spent: $SLOT stops admitting pages and drains what it has"
+              docker stop -t 3600 "$CONTAINER_NAME" >/dev/null 2>&1 || true
               break
             fi
             sleep 5
