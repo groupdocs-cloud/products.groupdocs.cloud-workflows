@@ -259,6 +259,7 @@ jobs:
             -e TRANSLATION_MODEL \
             -e OTEL_EXPORTER_OTLP_ENDPOINT \
             -e OTEL_EXPORTER_OTLP_HEADERS \
+            -e OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE \
             -e OTEL_SERVICE_NAME \
             -e OTEL_RESOURCE_ATTRIBUTES \
             -e TRANSLAGENT_MAX_CONCURRENCY \
@@ -304,6 +305,14 @@ jobs:
           TRANSLATION_MODEL: ${{ secrets.TRANSLATION_MODEL || 'professionalize-gpt-oss' }}
           OTEL_EXPORTER_OTLP_ENDPOINT: ${{ secrets.OTEL_EXPORTER_OTLP_ENDPOINT }}
           OTEL_EXPORTER_OTLP_HEADERS: ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
+          # The slots run side by side and metrics carry no per-process
+          # identity, so all four write one cumulative series and the counts
+          # interleave into nonsense - run 153 landed 64 pages and the counter
+          # reported 27. Delta exports carry each process's own increment for
+          # the interval, which the collector adds up, so the arithmetic is
+          # right for any number of processes and no attribute is invented to
+          # keep them apart.
+          OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: delta
           OTEL_SERVICE_NAME: translagent
           GIT_AUTHOR_NAME: ${{ secrets.GIT_AUTHOR_NAME }}
           GIT_AUTHOR_EMAIL: ${{ secrets.GIT_AUTHOR_EMAIL }}
