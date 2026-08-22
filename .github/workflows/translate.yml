@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       products:
-        description: "Comma-separated products, or empty for the demand rotation (2 anchors + 2 rotating slots)"
+        description: "Comma-separated products or subtrees, or empty for the demand ladder"
         required: false
         default: ""
         type: string
@@ -108,22 +108,40 @@ jobs:
           import json, os
           cfg = json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "effective.json")))
           langs = set(cfg["languages"]) - {cfg["defaultcontentlanguage"]}
-          # Impressions per locale, Search Console 2026-05-23..2026-08-18: ru
-          # alone is 18% of the site's demand and da is 0.03%. A language the
-          # site adds that is not ranked here joins the end alphabetically.
-          ranked = "ru es pt id fr it fa ja de zh he ar vi ko el tr th da".split()
-          order = [l for l in ranked if l in langs] + sorted(langs - set(ranked))
+          # Impressions per locale, Search Console 2026-05-23..2026-08-18.
+          # The walk is page-major, so the language list is a multiplier on
+          # every page rather than a prefix a budget truncates: all of it is
+          # paid for each page reached. These nine carry 95.2% of the locale
+          # demand between them, and the nine below them - zh he ar vi ko el
+          # tr th da, 4.8% - would double what a page costs to reach. They are
+          # not dropped, they are queued: name them in `languages` to run them,
+          # and move one up here when its demand earns the multiplier.
+          ranked = "ru es pt id fr it fa ja de".split()
+          order = [l for l in ranked if l in langs] or sorted(langs)
           print("list=" + ",".join(order))
           PY
 
-      # Four products a run, not a sliver of every product: with fifteen
-      # slices the share was shorter than the pages it opened, so slice ends
+      # Four slots a run, not a sliver of every product: with fifteen slices
+      # the share was shorter than the pages it opened, so slice ends
       # abandoned whatever was in flight and runs spent themselves re-walking
-      # skip prefixes. conversion and viewer carry ~92% of search impressions
-      # and anchor every run; two slots rotate through the rest by run number,
-      # so every product sees budget within a day while capacity follows
-      # demand. A product that finishes inside its slice still hands the rest
-      # to the ones after it.
+      # skip prefixes.
+      #
+      # What fills the four follows the demand, and demand inside a product is
+      # as lopsided as demand between products. Impressions per subtree,
+      # Search Console 2026-05-23..2026-08-18: viewer/android alone is 26% of
+      # everything the site is shown for, more than the whole of conversion's
+      # largest platform, so it holds a slot of its own in every run. Two
+      # slots rotate by run number through the platforms of conversion and
+      # viewer, the two products that carry 92% of impressions between them,
+      # and the fourth rotates through every other product. Three quarters of
+      # a run's budget therefore lands on that 92%, against half of it when
+      # the slots were whole products.
+      #
+      # Nothing starves: each rotation advances a slot per run, so a platform
+      # comes up within a day and a tail product within a fortnight. A slot
+      # that finishes inside its slice hands what is left to the ones after
+      # it, which is what a finished anchor costs once the reuse pass has
+      # nothing to send.
       - name: Translate
         run: |
           set -u
@@ -134,31 +152,39 @@ jobs:
           if [ -n "$PRODUCTS_INPUT" ]; then
             PRODUCTS=$(echo "$PRODUCTS_INPUT" | tr ',' '\n' | sed '/^$/d')
           else
-            # Impressions per product, Search Console 2026-05-07..2026-08-05,
-            # all locales summed. Products on disk that the ranking does not
-            # know join the end of the rotation.
-            RANKED="conversion viewer parser metadata translation signature editor merger rewriter comparison assembly annotation watermark classification total"
-            EXISTING=$(for dir in site/content/english/*/; do
-                [ -d "$dir" ] || continue
-                basename "$dir"
-              done)
-            ORDERED=""
-            for p in $RANKED; do
-              echo "$EXISTING" | grep -qx "$p" && ORDERED="$ORDERED $p"
-            done
-            for e in $EXISTING; do
-              case " $RANKED " in *" $e "*) ;; *) ORDERED="$ORDERED $e" ;; esac
-            done
-            ANCHORS=$(echo $ORDERED | tr ' ' '\n' | head -2)
-            TAIL=$(echo $ORDERED | tr ' ' '\n' | tail -n +3)
-            TAIL_LEN=$(echo "$TAIL" | sed '/^$/d' | wc -l)
-            WINDOW=""
-            if [ "$TAIL_LEN" -gt 0 ]; then
-              START=$(( GITHUB_RUN_NUMBER * 2 % TAIL_LEN ))
-              WINDOW=$(echo "$TAIL" | awk -v s="$START" \
-                '{t[NR-1]=$0} END {for (i = 0; i < 2 && i < NR; i++) print t[(s + i) % NR]}')
-            fi
-            PRODUCTS=$(printf '%s\n%s\n' "$ANCHORS" "$WINDOW" | sed '/^$/d')
+            PRODUCTS=$(python3 - <<'PY'
+          import os, pathlib
+
+          ROOT = pathlib.Path("site/content/english")
+          RUN = int(os.environ.get("GITHUB_RUN_NUMBER", "0"))
+          ANCHOR = "viewer/android"
+
+          def ladder(parent, ranked, skip=()):
+              """The children of `parent` in demand order, then the rest, so a
+              folder the site adds still comes up for its turn."""
+              root = ROOT / parent
+              if not root.is_dir():
+                  return []
+              here = sorted(d.name for d in root.iterdir() if d.is_dir())
+              here = [n for n in here if n not in skip]
+              return [n for n in ranked if n in here] + [n for n in here if n not in ranked]
+
+          def turn(names):
+              return [names[RUN % len(names)]] if names else []
+
+          conversion = ladder("conversion", "net curl php android python go ruby java nodejs".split())
+          viewer = ladder("viewer", "net php curl python java nodejs go".split(), skip={"android"})
+          rest = ladder(".", "parser metadata translation signature editor merger rewriter"
+                             " comparison assembly annotation watermark classification total".split(),
+                        skip={"conversion", "viewer"})
+
+          slots = [ANCHOR]
+          slots += [f"conversion/{n}" for n in turn(conversion)]
+          slots += [f"viewer/{n}" for n in turn(viewer)]
+          slots += turn(rest)
+          print("\n".join(s for s in slots if (ROOT / s).is_dir()))
+          PY
+            )
           fi
           TOTAL=$(echo "$PRODUCTS" | wc -l)
           echo "order: $(echo $PRODUCTS | tr '\n' ' ')"
